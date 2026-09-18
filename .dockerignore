@@ -1,0 +1,10 @@
+.venv
+.env
+.git
+data
+qa
+plan_qa
+logs
+__pycache__
+*.docx
+*.pdf

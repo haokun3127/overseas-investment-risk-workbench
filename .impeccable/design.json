@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-14T12:00:00+08:00",
+  "title": "Design System: 海外投资风险工作台",
+  "extensions": {
+    "tokens": {
+      "canvas": "#f5f7fb",
+      "sidebar": "#f8faff",
+      "surface": "#ffffff",
+      "surfaceRaised": "#f8fafc",
+      "surfaceHover": "#eef4ff",
+      "text": "#1e293b",
+      "muted": "#52647c",
+      "subtle": "#61738a",
+      "primary": "#2f64da",
+      "primaryHover": "#2453bc",
+      "primaryInk": "#ffffff",
+      "line": "#e2e7ef",
+      "focus": "#2563d9",
+      "riskRed": "#c93650",
+      "riskOrange": "#b75b13",
+      "riskYellow": "#8a6909",
+      "success": "#217650"
+    },
+    "dataViz": {
+      "network": "point grid, orbit rings, blue connector paths, category nodes",
+      "severity": "risk-red / risk-orange / risk-yellow ring segments",
+      "interaction": "click a node, legend row, severity tile, or review count to filter events"
+    },
+    "motion": [
+      {"name":"control","value":".15s ease-out","purpose":"按钮、导航、表格与输入状态"},
+      {"name":"dialog","value":"backdrop blur + soft overlay","purpose":"原文阅读聚焦"},
+      {"name":"reduced-motion","value":"all transitions and transforms disabled","purpose":"无障碍替代"}
+    ],
+    "breakpoints": [
+      {"name":"mobile","value":"700px"},
+      {"name":"tablet","value":"960px"},
+      {"name":"compact","value":"1190px"},
+      {"name":"wide","value":"1600px"}
+    ],
+    "focus": "2px solid #2563d9 with 3px offset"
+  },
+  "components": [
+    {"name":"primary-button","kind":"button","html":"<button class=\"primary\">导入资料</button>","css":"background:#2f64da;color:#ffffff;border-radius:7px;height:40px;box-shadow:0 2px 3px rgb(36 68 120 / 10%)"},
+    {"name":"navigation","kind":"nav","html":"<a class=\"active\" href=\"#overview\"><svg class=\"icon\"><use href=\"#i-overview\"/></svg>风险总览</a>","css":"background:#eaf1ff;color:#2c5dbb;border:1px solid #dce7fb;border-radius:9px;min-height:46px"},
+    {"name":"risk-network","kind":"data-viz","html":"<svg class=\"signal-network\">...</svg>","css":"background:#ffffff;point-grid + orbit-rings + blue connectors"},
+    {"name":"severity-ring","kind":"data-viz","html":"<svg class=\"severity-ring\">...</svg>","css":"risk-red / risk-orange / risk-yellow segments with clickable legend"},
+    {"name":"input","kind":"input","html":"<input placeholder=\"输入事件标题或摘要\">","css":"background:#ffffff;border:1px solid #d7dfe9;border-radius:7px;min-height:40px;box-shadow:0 1px 2px rgb(24 45 78 / 3%)"},
+    {"name":"evidence","kind":"card","html":"<blockquote>原文引用</blockquote>","css":"background:#f4f6fa;color:#334155;border-radius:6px;yellow mark highlight"}
+  ],
+  "narrative": {
+    "northStar":"让风险核验像读取一台清晰的研究终端",
+    "overview":"浅灰蓝工作区与白色内容区、钴蓝操作色、轻边界组件、信号关系网络、风险等级环图与证据阅读层。",
+    "dos":["保持风险列表和原文阅读的可读性","让图表点击进入真实筛选","保留演示标记、来源追溯和业务复核"],
+    "donts":["不使用霓虹渐变或装饰性粒子","不把发光效果铺满所有控件","不让科技感取代证据与状态"]
+  }
+}
