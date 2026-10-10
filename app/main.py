@@ -22,6 +22,7 @@ from .jobs import Worker
 from .retrieval import retrieve
 from .demo import seed
 from . import model
+from . import websites
 
 class Credentials(BaseModel):
     password: str = Field(min_length=10,max_length=128)
@@ -52,14 +53,25 @@ def create_app(settings=None, run_worker=True):
     settings=settings or Settings()
     store=Store(settings.data_dir)
     worker=Worker(store,settings)
+    websites.initialize(store)
+    website_worker=websites.SearchWorker(store,settings)
     login_attempts={}
     @asynccontextmanager
     async def lifespan(app):
-        if run_worker: worker.start()
-        yield
-        await worker.stop()
+        if run_worker:
+            worker.start()
+            website_worker.start()
+        try:
+            yield
+        finally:
+            try:
+                await worker.stop()
+            finally:
+                await website_worker.stop()
     app=FastAPI(title='海外投资风险工作台',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.store=store; app.state.worker=worker; app.state.settings=settings
+    app.state.website_worker=website_worker
+    websites.register(app,store,settings)
 
     @app.middleware('http')
     async def guard(request,call_next):
@@ -237,6 +249,8 @@ def create_app(settings=None, run_worker=True):
         doc=store.one('SELECT * FROM documents WHERE id=?',(doc_id,))
         if not doc: raise HTTPException(404,'资料不存在。')
         doc.pop('file_path'); doc.pop('digest')
+        doc['website_origin']=store.one('''SELECT v.id AS version_id,v.url,v.provider,v.acquired_at,v.published_date
+            FROM website_documents w JOIN website_versions v ON v.id=w.version_id WHERE w.document_id=?''',(doc_id,))
         doc['chunks']=store.rows('SELECT id,locator,text FROM chunks WHERE document_id=? ORDER BY id',(doc_id,))
         doc['analyses']=store.rows('SELECT id,version,decision,model,mode,created_at,result_json FROM analyses WHERE document_id=? ORDER BY version DESC',(doc_id,))
         for row in doc['analyses']:

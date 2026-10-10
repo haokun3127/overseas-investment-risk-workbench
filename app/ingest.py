@@ -3,6 +3,7 @@ import hashlib
 import io
 import re
 import zipfile
+from contextlib import nullcontext
 from pathlib import Path
 from urllib.parse import urlparse
 from docx import Document
@@ -100,10 +101,13 @@ def parse_file(filename, data):
         raise ValueError('支持 .csv、.xlsx、.docx、文本型 .pdf、.txt 和 .md 文件。')
     return [{'record': {'title': Path(filename).stem, 'body': body}, 'row': 1}]
 
-def insert_document(store, record, kind='event', allow_external=False, demo=False, file_path='', filename=''):
+def insert_document(store, record, kind='event', allow_external=False, demo=False, file_path='', filename='', connection=None, source_identity=''):
     r = validate_record(record)
-    digest = hashlib.sha256((kind + '\0' + str(demo) + '\0' + r['title'] + '\0' + r['body']).encode()).hexdigest()
-    with store.db() as db:
+    identity = kind + '\0' + str(demo) + '\0' + r['title'] + '\0' + r['body']
+    if source_identity:
+        identity += '\0' + source_identity
+    digest = hashlib.sha256(identity.encode()).hexdigest()
+    with nullcontext(connection) if connection is not None else store.db() as db:
         existing = db.execute('SELECT id FROM documents WHERE digest=?', (digest,)).fetchone()
         if existing:
             return existing['id'], False

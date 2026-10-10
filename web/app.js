@@ -2,7 +2,7 @@
 const $ = (s, root=document) => root.querySelector(s);
 const $$ = (s, root=document) => [...root.querySelectorAll(s)];
 const esc = v => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const names = {overview:'风险总览',events:'风险事件',documents:'资料与导入',knowledge:'知识库',jobs:'分析任务',settings:'模型与规则',report:'风险简报'};
+const names = {overview:'风险总览',events:'风险事件',documents:'资料与导入',knowledge:'知识库',jobs:'分析任务',settings:'模型与规则',report:'风险简报',websites:'网站检索'};
 const levels = {red:'高风险',orange:'中风险',yellow:'一般关注'};
 const statuses = {pending:'待复核',accepted:'已认可',needs_change:'需修正',queued:'排队中',running:'分析中',completed:'已完成',failed:'失败',cancelled:'已取消',risk:'发现风险',non_risk:'非风险',insufficient:'资料不足'};
 const state = {config:null,scope:'all',page:1,route:'overview',importMode:'file',filter:{},renderId:0};
@@ -103,11 +103,12 @@ async function render(){
     else if(route==='jobs')html=await jobsPage();
     else if(route==='settings')html=await settings();
     else if(route==='report')html=await reportView();
+    else if(route==='websites')html=await websitePage();
     else html=empty('页面不存在','请从左侧导航选择工作区。','<a href="#overview" class="primary">返回总览</a>');
     if(renderId!==state.renderId)return;
     html=await enhanceView(route,html);
     if(renderId!==state.renderId)return;
-    $('#main').innerHTML=`<div class="route-enter">${composeWorkspace(route,html)}</div>`;bind();bindFeatures();bindWorkflows();bindWorkspace();
+    $('#main').innerHTML=`<div class="route-enter">${composeWorkspace(route,html)}</div>`;bind();bindFeatures();bindWorkflows();bindWorkspace();bindWebsites();
   }catch(e){if(renderId===state.renderId)$('#main').innerHTML=errorBox(e.message)+'<button class="secondary" id="retry-page">重新加载</button>';$('#retry-page')?.addEventListener('click',render);}
 }
 async function overview(){
@@ -167,6 +168,10 @@ async function showSource(id,quote=''){
     if(quote&&d.body.includes(quote)){const i=d.body.indexOf(quote);text=esc(d.body.slice(0,i))+'<mark>'+esc(quote)+'</mark>'+esc(d.body.slice(i+quote.length));}
     $('#source-content').innerHTML=`<h2>${esc(d.title)}${demoTag(d.demo)}</h2><div class="metadata"><span>${esc(d.source||'来源未填写')}</span><span>${esc(d.date||'日期未注明')}</span><span>资料 #${d.id}</span></div><div class="actions">${d.filename?`<a class="secondary small" href="/api/documents/${d.id}/file">下载原始附件</a>`:''}${d.url?`<a class="secondary small" href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">打开来源链接</a>`:''}</div><div class="source-body">${text}</div><h3>分析版本</h3>${d.analyses.length?d.analyses.map(a=>`<p class="form-note">v${a.version} · ${badge(a.decision)} · ${esc(a.model)} · ${when(a.created_at)}<br>${esc(a.result.reason||a.result.parts?.map(p=>p.reason).join('；')||'查看风险列表中的分析结果。')}</p>`).join(''):'<p class="muted">尚无分析记录。</p>'}`;
     const history=d.analyses.filter(a=>a.events?.length);
+    if(d.website_origin){
+      const origin=d.website_origin;
+      $('#source-content').insertAdjacentHTML('beforeend',`<p class="form-note">网站来源版本 #${origin.version_id} · 采集时间 ${when(origin.acquired_at)} · ${esc(origin.provider)} 提供的正文快照。请结合来源链接核验；旧版本正文不会被网站更新覆盖。</p>`);
+    }
     if(history.length){
       $('#source-content').insertAdjacentHTML('beforeend','<h3>各版本风险事件</h3>'+history.map(a=>`<div class="version-links"><small>v${a.version}</small>${a.events.map(e=>`<a href="#event/${e.id}" data-history>${esc(e.title)}</a>`).join('')}</div>`).join(''));
       $$('[data-history]',dialog).forEach(a=>a.onclick=()=>dialog.close());
@@ -232,5 +237,5 @@ $('#logout').onclick=async()=>{try{await api('/auth/logout',{method:'POST'});awa
 $('#mobile-logout').onclick=()=>$('#logout').click();
 window.addEventListener('hashchange',render);
 let polling=false;
-setInterval(async()=>{if($('#shell').hidden||polling||document.hidden)return;polling=true;try{const jobs=await api('/jobs');const active=jobs.active;$('#job-count').textContent=active||'';const editing=document.activeElement?.closest('form');if(state.route==='jobs'&&!editing&&!$('#source-dialog').open&&(active||state.lastActive)){await render();}state.lastActive=active;}catch{}finally{polling=false;}},4000);
+setInterval(async()=>{if($('#shell').hidden||polling||document.hidden)return;polling=true;try{const jobs=await api('/jobs');const active=jobs.active;$('#job-count').textContent=active||'';const editing=document.activeElement?.closest('form');if(state.route==='jobs'&&!editing&&!$('#source-dialog').open&&(active||state.lastActive)){await render();}if(state.route==='websites'&&state.websiteActive&&!editing&&!$('#source-dialog').open)await render();state.lastActive=active;}catch{}finally{polling=false;}},4000);
 boot().catch(e=>{$('#auth').hidden=false;$('#auth').innerHTML=`<section class="auth-card"><h1>暂时无法连接服务</h1>${errorBox(e.message)}<p>请检查后端是否启动，再刷新页面。</p></section>`;});

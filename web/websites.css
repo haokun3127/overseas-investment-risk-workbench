@@ -1,0 +1,17 @@
+.website-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px;margin-bottom:20px}
+.website-grid .panel{min-width:0;margin-bottom:0}
+.website-grid fieldset{border:1px solid var(--border,#dce3ec);border-radius:8px;padding:12px;margin:0 0 16px}
+.website-grid legend{font-weight:600;padding:0 6px}
+.website-source-list{margin-top:20px}
+.website-source-list article{border-top:1px solid #dce3ec;padding:14px 0}
+.website-source-list p,.website-result .source-line{overflow-wrap:anywhere}
+.website-result{border-top:1px solid #dce3ec;padding:20px 0}
+.website-result h3{margin:0 0 8px;overflow-wrap:anywhere}
+.website-result details{margin:12px 0}
+.website-result summary{cursor:pointer;font-weight:600}
+.website-body{white-space:pre-wrap;overflow-wrap:anywhere;max-height:350px;overflow:auto;font:inherit;line-height:1.7;padding:12px;background:#f3f6fb;border-radius:8px}
+.website-review{margin-top:16px}
+.website-review .actions{flex-wrap:wrap}
+.page-websites .table-wrap{overflow-x:auto}
+.page-websites .table-wrap table{min-width:680px}
+@media(max-width:800px){.website-grid{grid-template-columns:minmax(0,1fr)}.website-grid .form-grid{grid-template-columns:minmax(0,1fr)}}

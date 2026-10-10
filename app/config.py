@@ -16,6 +16,10 @@ class Settings:
     model_timeout: float = float(os.getenv('MODEL_TIMEOUT', '90'))
     model_json_mode: bool = os.getenv('MODEL_JSON_MODE', 'true').lower() == 'true'
     secure_cookie: bool = os.getenv('SECURE_COOKIE', 'false').lower() == 'true'
+    search_provider: str = os.getenv('SEARCH_PROVIDER', 'tavily')
+    search_base_url: str = os.getenv('SEARCH_BASE_URL', 'https://api.tavily.com').rstrip('/')
+    search_api_key: str = os.getenv('SEARCH_API_KEY', '')
+    search_timeout: float = float(os.getenv('SEARCH_TIMEOUT', '60'))
     max_upload: int = 10 * 1024 * 1024
 
     @property
