@@ -54,7 +54,7 @@ MODEL_TIMEOUT=90
 MODEL_JSON_MODE=true
 ```
 
-服务必须兼容 `POST {MODEL_BASE_URL}/chat/completions` 的 messages 与 choices 返回结构。若供应商不支持 `response_format`，设置 `MODEL_JSON_MODE=false`；仍要求输出合法 JSON。API 地址和模型标识不预设厂商。模型服务变更后重启后端。
+默认协议是 Chat Completions。设置 `MODEL_WIRE_API=responses` 时，使用 `POST {MODEL_BASE_URL}/responses` 的 input 与 output 返回结构；可通过 `MODEL_REASONING_EFFORT=low` 指定推理强度。默认 `MODEL_STORE=false`，请求不保存模型服务端响应状态。Chat Completions 使用 messages 与 choices 返回结构。若供应商不支持 `response_format`，设置 `MODEL_JSON_MODE=false`；仍要求输出合法 JSON。API 地址和模型标识不预设厂商。模型服务变更后重启后端。
 
 密钥不通过前端设置或返回。不应发到聊天、提交 Git 或写入日志。模型设置页显示“已配置”仅说明必要配置存在，不等于真实接口已验证。
 
@@ -143,3 +143,7 @@ start.ps1     Windows 后台启动入口（支持 -Foreground）
 - FastAPI 文件上传：https://fastapi.tiangolo.com/tutorial/request-files/
 
 这是一台服务器上的验证版本，尚未进行甲方真实案例验收、GPU 推理部署、高并发测试、企业级安全加固或生产级容灾建设。
+
+## 指定网站 AI 检索
+
+已支持可配置网站、同域栏目采集、AI相关性筛选、来源核验、去重入库、定时检索及新风险资料自动分析。入口为“网站检索”；默认手动运行。详细边界与操作见 [网站检索说明](docs/WEBSITE-RETRIEVAL.md)。

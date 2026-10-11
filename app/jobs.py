@@ -72,7 +72,8 @@ class Worker:
             events = list(unique.values())
             decision = 'risk' if events else ('insufficient' if any(r['decision']=='insufficient' for r in results) else 'non_risk')
             result_blob = {'decision':decision,'parts':results,'prompt_version':model.PROMPT_VERSION,
-                           'partial_context':len(chunks)>1,'review_required':True}
+                           'partial_context':len(chunks)>1,'review_required':True,
+                           'model_config':{'wire_api':self.settings.model_wire_api,'reasoning_effort':self.settings.model_reasoning_effort,'store':self.settings.model_store}}
             with self.store.db() as db:
                 version = db.execute('SELECT COALESCE(MAX(version),0)+1 FROM analyses WHERE document_id=?',(doc['id'],)).fetchone()[0]
                 analysis_id = db.execute('''INSERT INTO analyses(document_id,job_id,version,decision,model,mode,rules_json,knowledge_json,result_json,created_at,duration_ms,usage_json)

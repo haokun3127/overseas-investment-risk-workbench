@@ -22,9 +22,13 @@ from .jobs import Worker
 from .retrieval import retrieve
 from .demo import seed
 from . import model
+from .websearch import Collector, initialize as initialize_websearch, router as websearch_router
 
 class Credentials(BaseModel):
     password: str = Field(min_length=10,max_length=128)
+
+class LoginCredentials(BaseModel):
+    password: str = Field(min_length=8,max_length=128)
 
 class Record(BaseModel):
     title: str
@@ -52,18 +56,28 @@ def create_app(settings=None, run_worker=True):
     settings=settings or Settings()
     store=Store(settings.data_dir)
     worker=Worker(store,settings)
+    initialize_websearch(store)
+    collector=Collector(store,settings)
     login_attempts={}
     @asynccontextmanager
     async def lifespan(app):
-        if run_worker: worker.start()
+        if run_worker:
+            worker.start()
+            collector.start()
         yield
         await worker.stop()
+        await collector.stop()
     app=FastAPI(title='海外投资风险工作台',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.store=store; app.state.worker=worker; app.state.settings=settings
+    app.state.collector=collector
+    app.include_router(websearch_router(store,settings))
 
     @app.middleware('http')
     async def guard(request,call_next):
         path=request.url.path
+        root_path=request.scope.get('root_path','').rstrip('/')
+        if root_path and path.startswith(root_path+'/'):
+            path=path[len(root_path):]
         if request.method in ('POST','PUT','PATCH','DELETE'):
             origin=request.headers.get('origin')
             if origin and urlparse(origin).netloc != request.headers.get('host'):
@@ -78,7 +92,7 @@ def create_app(settings=None, run_worker=True):
                 return JSONResponse({'detail':'无效请求长度。'},status_code=400)
         public={'/api/auth/status','/api/auth/setup','/api/auth/login','/api/health'}
         if path.startswith('/api/') and path not in public:
-            token=request.cookies.get('risk_session','')
+            token=request.cookies.get(settings.session_cookie_name,'')
             key=hashlib.sha256(token.encode()).hexdigest()
             if not token or not store.one('SELECT token FROM sessions WHERE token=? AND expires>?',(key,time.time())):
                 return JSONResponse({'detail':'请先登录。'},status_code=401)
@@ -98,7 +112,7 @@ def create_app(settings=None, run_worker=True):
 
     @app.get('/api/auth/status')
     def auth_status(request:Request):
-        token=request.cookies.get('risk_session','')
+        token=request.cookies.get(settings.session_cookie_name,'')
         logged=bool(token and store.one('SELECT token FROM sessions WHERE token=? AND expires>?',(hashlib.sha256(token.encode()).hexdigest(),time.time())))
         return {'initialized':bool(store.setting('admin')),'authenticated':logged}
 
@@ -108,7 +122,7 @@ def create_app(settings=None, run_worker=True):
             db.execute('DELETE FROM sessions WHERE expires<?',(time.time(),))
             db.execute('INSERT INTO sessions VALUES (?,?)',(hashlib.sha256(token.encode()).hexdigest(),time.time()+8*3600))
         response=JSONResponse({'ok':True})
-        response.set_cookie('risk_session',token,httponly=True,secure=settings.secure_cookie,samesite='strict',max_age=8*3600)
+        response.set_cookie(settings.session_cookie_name,token,path=settings.cookie_path,httponly=True,secure=settings.secure_cookie,samesite='strict',max_age=8*3600)
         return response
 
     @app.post('/api/auth/setup')
@@ -124,7 +138,7 @@ def create_app(settings=None, run_worker=True):
         return set_session()
 
     @app.post('/api/auth/login')
-    def login(data:Credentials,request:Request):
+    def login(data:LoginCredentials,request:Request):
         key=request.client.host
         tries=[t for t in login_attempts.get(key,[]) if t>time.time()-300]
         if len(tries)>=10:
@@ -139,13 +153,15 @@ def create_app(settings=None, run_worker=True):
     @app.post('/api/auth/logout')
     def logout(request:Request):
         with store.db() as db:
-            db.execute('DELETE FROM sessions WHERE token=?',(hashlib.sha256(request.cookies.get('risk_session','').encode()).hexdigest(),))
-        response=JSONResponse({'ok':True}); response.delete_cookie('risk_session'); return response
+            db.execute('DELETE FROM sessions WHERE token=?',(hashlib.sha256(request.cookies.get(settings.session_cookie_name,'').encode()).hexdigest(),))
+        response=JSONResponse({'ok':True}); response.delete_cookie(settings.session_cookie_name,path=settings.cookie_path); return response
 
     @app.get('/api/settings')
     def config():
+        latest=store.one('SELECT created_at,model FROM analyses WHERE model=? AND mode=? ORDER BY id DESC LIMIT 1',(settings.model_name,settings.model_mode))
         return {'configured':settings.configured,'mode':settings.model_mode,'model':settings.model_name,
-                'base_url':settings.model_base_url,'rules':store.setting('rules'),
+                'last_success':latest,
+                'base_url':settings.model_base_url,'wire_api':settings.model_wire_api,'reasoning_effort':settings.model_reasoning_effort,'store_responses':settings.model_store,'rules':store.setting('rules'),
                 'retrieval':'本地 BM25 文本检索（中文双字词）','prompt_version':'risk-evidence-v1'}
 
     @app.put('/api/rules')

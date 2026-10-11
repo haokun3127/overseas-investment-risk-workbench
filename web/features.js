@@ -20,7 +20,7 @@ async function enhanceView(route,html){
     try{const r=await api('/runtime');host.insertAdjacentHTML('beforeend',`<section class="panel"><div class="panel-heading"><h2>本地运行状态</h2><button class="text-button" data-refresh>更新状态</button></div><div class="panel-content"><dl class="definition"><dt>状态时间</dt><dd>${when(r.checked_at)}</dd><dt>后台队列</dt><dd>${r.worker_enabled?'已启用':'未启用（当前实例不执行任务）'}</dd><dt>资料与索引</dt><dd>${r.documents} 条资料 · ${r.chunks} 个文本片段 · ${r.analyses} 个分析版本</dd><dt>数据库大小</dt><dd>${(r.database_bytes/1048576).toFixed(2)} MB（不含附件及 WAL 文件）</dd><dt>磁盘可用</dt><dd>${(r.disk_free_bytes/1073741824).toFixed(2)} GB</dd><dt>最近分析记录</dt><dd>${r.last_analysis?when(r.last_analysis.created_at)+' · '+esc(r.last_analysis.model):'暂无分析记录'}</dd></dl><p class="form-note">上线前请由运维人员按项目 README 的备份与恢复步骤验证恢复流程。系统不会自动生成备份。</p></div></section>`);}catch(e){host.insertAdjacentHTML('beforeend',errorBox('运行状态读取失败：'+e.message));}
   }
   if(route==='events'){
-    const href='/api/export/events?'+new URLSearchParams({...state.filter,demo:state.scope});
+    const href='api/export/events?'+new URLSearchParams({...state.filter,demo:state.scope});
     host.querySelector('.page-heading .actions').insertAdjacentHTML('afterbegin',`<a class="secondary" href="${esc(href)}">导出当前筛选 CSV</a>`);
     host.querySelector('.page-heading .actions').insertAdjacentHTML('afterbegin',`<a class="secondary" href="#report?${esc(new URLSearchParams({...state.filter,demo:state.scope}))}">生成风险简报</a>`);
     host.querySelector('#event-filter').insertAdjacentHTML('beforeend','<span class="filter-help">导出包含全部匹配事件、复核意见及引用依据。</span>');
@@ -32,15 +32,16 @@ async function enhanceView(route,html){
     host.querySelector('.back-link').href=state.lastEvents||eventHref();
   }
   if(route==='documents'||route==='knowledge'){
+    host.querySelector('.page-heading .actions').insertAdjacentHTML('beforeend','<a class="secondary" href="#websites">从网站检索资料</a>');
     const form=host.querySelector('#document-filter');
     form.querySelector('input').placeholder='按标题或来源搜索';
     form.insertAdjacentHTML('beforeend',`<label>使用范围<select name="policy">${[['','全部资料'],['local','仅限本地'],['external','允许外部分析']].map(([v,l])=>`<option value="${v}" ${state.filter.policy===v?'selected':''}>${l}</option>`).join('')}</select></label>${route==='documents'?`<label>分析状态<select name="status">${[['','全部状态'],['unanalysed','尚无分析结果'],['queued','排队中'],['running','分析中'],['completed','已完成'],['failed','失败']].map(([v,l])=>`<option value="${v}" ${state.filter.status===v?'selected':''}>${l}</option>`).join('')}</select></label>`:''}<button class="text-button" type="button" id="reset-doc-filter">重置</button>`);
     const importForm=host.querySelector('#import-form');
-    importForm.insertAdjacentHTML('afterbegin','<p class="draft-hint" id="draft-status" role="status">手动录入内容在本次页面会话内暂存。</p>');
+    if(state.importMode==='manual')importForm.insertAdjacentHTML('afterbegin','<p class="draft-hint" id="draft-status" role="status">手动录入内容在本次页面会话内暂存。</p>');
     const body=importForm.querySelector('[name=body]');
     if(body)body.insertAdjacentHTML('afterend','<small id="body-count">0 / 60000 字符</small>');
     const select=host.querySelector('#analyze-selected');
-    if(select)select.textContent='分析所选资料（0）';
+    if(select){select.textContent='分析所选资料（0）';select.disabled=true;host.querySelector('#document-filter').insertAdjacentHTML('afterend','<p class="selection-help">勾选资料后开始分析。演示资料仅供查看，导入新资料后可分析。</p>');}
   }
   if(route==='jobs'&&!host.querySelector('#job-filter')){
     host.querySelector('.panel-heading').insertAdjacentHTML('afterend',`<form class="filters" id="job-filter"><label class="search-field">搜索任务<input name="q" placeholder="输入资料标题或任务编号"></label><label>任务状态<select name="status"><option value="">全部状态</option>${['queued','running','completed','failed'].map(s=>`<option value="${s}">${statuses[s]}</option>`).join('')}</select></label><button class="secondary small">筛选</button><span id="job-match" class="muted" aria-live="polite"></span></form>`);
@@ -100,7 +101,7 @@ function bindFeatures(){
     },true);
   }
   const selected=$('#analyze-selected');
-  if(selected){const update=()=>{selected.textContent=`分析所选资料（${$$('[name=doc-select]:checked').length}）`;};$$('[name=doc-select],#select-all').forEach(c=>c.addEventListener('change',update));}
+  if(selected){const update=()=>{const n=$$('[name=doc-select]:checked').length;selected.textContent=`分析所选资料（${n}）`;selected.disabled=!n;};$$('[name=doc-select],#select-all').forEach(c=>c.addEventListener('change',update));}
   const jobForm=$('#job-filter');
   if(jobForm){
     const apply=()=>{state.filter=Object.fromEntries(new FormData(jobForm));state.page=1;navigateList();};

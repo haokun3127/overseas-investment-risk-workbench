@@ -22,6 +22,10 @@ def validate_endpoint(settings):
     u = urlparse(settings.model_base_url)
     if u.scheme not in ('http','https') or not u.hostname or u.username or u.password or u.query or u.fragment:
         raise ValueError('模型地址必须是无凭据、无查询参数的 http(s) API 基础地址。')
+    if settings.model_reasoning_effort not in ('','none','low','medium','high','xhigh','max'):
+        raise ValueError('MODEL_REASONING_EFFORT 配置无效。')
+    if settings.model_wire_api not in ('chat_completions','responses'):
+        raise ValueError('MODEL_WIRE_API 只能为 chat_completions 或 responses。')
     if settings.model_mode not in ('external','local'):
         raise ValueError('MODEL_MODE 只能为 external 或 local。')
     if settings.model_mode == 'external' and u.scheme != 'https':
@@ -34,24 +38,43 @@ def validate_endpoint(settings):
         except OSError:
             raise ValueError('无法解析本地模型服务地址。')
 
-async def call_model(settings, payload):
+async def call_model(settings, payload, system=SYSTEM):
     validate_endpoint(settings)
-    request = {'model': settings.model_name, 'messages': [{'role':'system','content':SYSTEM},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}]}
-    if settings.model_json_mode:
-        request['response_format'] = {'type':'json_object'}
+    messages = [{'role':'system','content':system},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}]
+    responses = settings.model_wire_api == 'responses'
+    request = {'model':settings.model_name, 'store':settings.model_store}
+    if responses:
+        request['input'] = messages
+        if settings.model_reasoning_effort:
+            request['reasoning'] = {'effort':settings.model_reasoning_effort}
+        if settings.model_json_mode:
+            request['text'] = {'format':{'type':'json_object'}}
+    else:
+        request['messages'] = messages
+        if settings.model_reasoning_effort:
+            request['reasoning_effort'] = settings.model_reasoning_effort
+        if settings.model_json_mode:
+            request['response_format'] = {'type':'json_object'}
+    endpoint = '/responses' if responses else '/chat/completions'
     headers = {'Authorization':f'Bearer {settings.model_api_key}'} if settings.model_api_key else {}
     async with httpx.AsyncClient(timeout=settings.model_timeout,follow_redirects=False,trust_env=False) as client:
         for attempt in range(3):
             try:
-                response = await client.post(settings.model_base_url+'/chat/completions',json=request,headers=headers)
+                response = await client.post(settings.model_base_url+endpoint,json=request,headers=headers)
                 if response.status_code in (429,502,503,504) and attempt < 2:
                     await asyncio.sleep(2**attempt)
                     continue
                 if response.status_code >= 300:
                     raise ValueError(f'模型服务返回 HTTP {response.status_code}，请检查服务地址、权限或配额。')
                 data = response.json()
-                text = data['choices'][0]['message']['content']
-                if not isinstance(text,str) or len(text)>100000:
+                if responses:
+                    if data.get('status') != 'completed':
+                        raise ValueError('模型响应未完成，结果未保存，请重试或检查输出限制。')
+                    text = ''.join(part['text'] for item in data['output'] if item.get('type')=='message'
+                                   for part in item.get('content',[]) if part.get('type')=='output_text')
+                else:
+                    text = data['choices'][0]['message']['content']
+                if not isinstance(text,str) or not text.strip() or len(text)>100000:
                     raise ValueError('模型输出为空或超出长度限制。')
                 if text.strip().startswith('```'):
                     text = text.strip().removeprefix('```json').removeprefix('```').removesuffix('```').strip()

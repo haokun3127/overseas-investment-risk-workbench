@@ -237,12 +237,12 @@ input:hover,textarea:hover,select:hover { border-color:#aebed5; }
 input:focus,textarea:focus,select:focus { border-color:#6f94df; box-shadow:0 0 0 3px rgb(58 107 205 / 11%); }
 input::placeholder,textarea::placeholder { color:#98a2b2; font-size:13px; }
 input:disabled,textarea:disabled,select:disabled { background:#f4f6f9; color:#929dae; cursor:not-allowed; }
-select,.filters select { appearance:none; background-image:url('/static/chevron.svg'); background-repeat:no-repeat; background-position:right 10px center; padding-right:34px; }
+select,.filters select { appearance:none; background-image:url('chevron.svg'); background-repeat:no-repeat; background-position:right 10px center; padding-right:34px; }
 select option { color:#26344c; background:white; }
 input[type=date] { font-variant-numeric:tabular-nums; }
 input[type=date]::-webkit-calendar-picker-indicator { opacity:.45; width:16px; cursor:pointer; }
 input[type=checkbox] { appearance:none; width:17px; height:17px; min-height:17px; border:1px solid #ccd6e5; border-radius:4px; padding:0; background:white; box-shadow:0 1px 2px rgb(24 45 78 / 4%); }
-input[type=checkbox]:checked { background:#3b6dd9 url('/static/checked.svg') center/14px no-repeat; border-color:#3b6dd9; }
+input[type=checkbox]:checked { background:#3b6dd9 url('checked.svg') center/14px no-repeat; border-color:#3b6dd9; }
 input[type=checkbox]:disabled { background-color:#f0f3f7; border-color:#e0e6ef; opacity:.6; }
 .field,.library-tools .field,#inspection-review .field { font-size:13px; font-weight:500; color:#53617a; gap:9px; }
 .field small { font-size:12px; font-weight:400; color:#8490a3; }

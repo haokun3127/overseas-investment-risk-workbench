@@ -135,6 +135,17 @@ def test_setup_is_local_only(tmp_path):
     with TestClient(app,headers=HEADERS,client=('192.168.5.5',321)) as c:
         assert c.post('/api/auth/setup',json={'password':'test-password-2026'}).status_code==403
 
+def test_login_accepts_existing_eight_character_password(tmp_path):
+    from app.main import password_hash
+    app=create_app(Settings(data_dir=tmp_path),False)
+    with TestClient(app,headers=HEADERS) as c:
+        assert c.post('/api/auth/setup',json={'password':'admin123'}).status_code==422
+        salt='ab'*16
+        with app.state.store.db() as db:
+            db.execute('INSERT INTO settings VALUES (?,?)',('admin',json.dumps({'salt':salt,'hash':password_hash('admin123',salt)})))
+        assert c.post('/api/auth/login',json={'password':'admin123'}).status_code==200
+        assert c.get('/api/settings').status_code==200
+
 def test_import_csv_partial_and_duplicate(client):
     csv='标题,时间,来源,正文,原始链接\n测试标题,2026-09-01,合成资料,这是用于测试的完整风险资料,\n空正文,2026-09-01,测试,,\n'
     r=client.post('/api/import',files={'file':('samples.csv',csv.encode('utf-8-sig'),'text/csv')})
@@ -306,3 +317,51 @@ def test_long_document_failed_part_saves_no_partial_analysis(client,monkeypatch)
     assert len(calls)==2
     assert store.one('SELECT status FROM jobs WHERE id=?',(job_id,))['status']=='failed'
     assert not client.get(f'/api/documents/{doc_id}').json()['analyses']
+
+
+def test_subpath_authentication_and_cookie_isolation(tmp_path):
+    settings=Settings(data_dir=tmp_path,cookie_path='/rag/',session_cookie_name='risk_rag_session',secure_cookie=True)
+    app=create_app(settings,run_worker=False)
+    with TestClient(app,base_url='https://testserver',root_path='/rag',client=('127.0.0.1',123)) as client:
+        assert client.get('/rag/api/overview').status_code==401
+        response=client.post('/rag/api/auth/setup',json={'password':'subpath-test-password'},headers=HEADERS)
+        assert response.status_code==200
+        cookie=response.headers['set-cookie']
+        assert 'risk_rag_session=' in cookie and 'Path=/rag/' in cookie and 'Secure' in cookie
+        assert client.get('/rag/api/auth/status').json()['authenticated']
+        assert client.get('/rag/api/overview').status_code==200
+        assert client.post('/rag/api/auth/logout',headers=HEADERS).status_code==200
+        assert client.get('/rag/api/overview').status_code==401
+
+
+@pytest.mark.parametrize('status,text,success',[
+    ('completed','{"decision":"insufficient","reason":"合成测试","events":[]}',True),
+    ('incomplete','{"decision":"insufficient","reason":"合成测试","events":[]}',False),
+    ('completed','',False),
+    ('completed','not-json',False),
+])
+def test_responses_transport_and_storage_policy(monkeypatch,status,text,success):
+    import httpx
+    from app import model
+    observed=[]
+    def handler(request):
+        body=json.loads(request.content)
+        observed.append(body)
+        assert request.url.path=='/v1/responses'
+        assert body['model']=='gpt-6.1-sol' and body['store'] is False
+        assert body['reasoning']=={'effort':'low'}
+        assert 'messages' not in body and body['input'][0]['role']=='system'
+        assert body['text']['format']['type']=='json_object'
+        return httpx.Response(200,json={'status':status,'output':[
+            {'type':'reasoning','summary':[]},
+            {'type':'message','content':[{'type':'output_text','text':text}]}],
+            'usage':{'input_tokens':10,'output_tokens':20}})
+    original=httpx.AsyncClient
+    monkeypatch.setattr(model.httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(handler),**kw))
+    settings=Settings(model_mode='external',model_base_url='https://example.test/v1',model_name='gpt-6.1-sol',model_api_key='synthetic-key',model_wire_api='responses',model_reasoning_effort='low')
+    if success:
+        result,usage=asyncio.run(model.call_model(settings,{'synthetic':True}))
+        assert result['decision']=='insufficient' and usage['output_tokens']==20
+    else:
+        with pytest.raises(ValueError):asyncio.run(model.call_model(settings,{'synthetic':True}))
+    assert len(observed)==1

@@ -13,9 +13,14 @@ class Settings:
     model_base_url: str = os.getenv('MODEL_BASE_URL', '').rstrip('/')
     model_name: str = os.getenv('MODEL_NAME', '')
     model_api_key: str = os.getenv('MODEL_API_KEY', '')
+    model_wire_api: str = os.getenv('MODEL_WIRE_API', 'chat_completions')
+    model_reasoning_effort: str = os.getenv('MODEL_REASONING_EFFORT', '')
+    model_store: bool = os.getenv('MODEL_STORE', 'false').lower() == 'true'
     model_timeout: float = float(os.getenv('MODEL_TIMEOUT', '90'))
     model_json_mode: bool = os.getenv('MODEL_JSON_MODE', 'true').lower() == 'true'
     secure_cookie: bool = os.getenv('SECURE_COOKIE', 'false').lower() == 'true'
+    cookie_path: str = os.getenv('COOKIE_PATH', '/')
+    session_cookie_name: str = os.getenv('SESSION_COOKIE_NAME', 'risk_session')
     max_upload: int = 10 * 1024 * 1024
 
     @property
