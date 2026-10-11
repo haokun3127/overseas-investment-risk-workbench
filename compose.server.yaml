@@ -1,0 +1,39 @@
+name: risk-workbench-isolated
+services:
+  workbench:
+    build:
+      context: .
+    image: risk-workbench-isolated:${WORKBENCH_IMAGE_TAG:-local}
+    ports:
+      - "127.0.0.1:${WORKBENCH_PORT:-18000}:8000"
+    env_file: ${WORKBENCH_ENV_FILE:-.env}
+    environment:
+      DATA_DIR: /app/data
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - risk-data:/app/data
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=67108864
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    cpus: ${WORKBENCH_CPUS:-1.0}
+    mem_limit: ${WORKBENCH_MEMORY:-1g}
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request; opener=urllib.request.build_opener(urllib.request.ProxyHandler({})); assert json.load(opener.open('http://127.0.0.1:8000/api/health',timeout=3)) == {'status':'ok'}"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+volumes:
+  risk-data:

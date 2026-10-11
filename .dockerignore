@@ -5,6 +5,7 @@ data
 qa
 plan_qa
 logs
+dist
 __pycache__
 *.docx
 *.pdf
