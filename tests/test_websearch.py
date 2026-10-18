@@ -567,7 +567,7 @@ def test_navigation_pages_are_crawled_but_not_kept(web_client,monkeypatch):
     assert websearch.navigation_page('https://x.go.id/',p,'body text')
     assert websearch.navigation_page('https://kemlu.go.id/id',p,'x')
     hub=websearch.PageParser();hub.feed(''.join(f'<a href="/p{i}">Peraturan nomor {i} tahun 2026</a>' for i in range(30)))
-    assert websearch.navigation_page('https://x.go.id/peraturan',hub,hub.result()[1])
+    assert not websearch.navigation_page('https://x.go.id/peraturan',hub,hub.result()[1])  # lists go to the AI review
     article=websearch.PageParser();article.feed('<p>'+'Isi peraturan tentang tenaga kerja asing. '*40+'</p><a href="/x">x</a>')
     assert not websearch.navigation_page('https://x.go.id/peraturan/detail/1',article,article.result()[1])
     def site(url,base,robots=None,relaxed=False,**kw):
@@ -579,9 +579,18 @@ def test_navigation_pages_are_crawled_but_not_kept(web_client,monkeypatch):
             html='<title>原料供应通报</title><p>港口设备故障导致原料延迟七天，库存仅能维持三天生产。'+url+'</p>'
         return url,html,html.encode(),'text/html'
     monkeypatch.setattr(websearch,'fetch_page',site);monkeypatch.setattr(websearch.model,'call_model',fake_model)
-    run=process(web_client,add_source(web_client,url='https://source.example/',max_pages=4))
+    run=process(web_client,add_source(web_client,url='https://source.example/',max_pages=3))
+    # The home page feeds the queue but does not use one of the three pages.
     assert run['status']=='completed' and len(run['items'])==3 and all('/detail/' in p['url'] for p in run['items'])
-    only_home=process(web_client,add_source(web_client,url='https://source.example/',max_pages=1))
+    one=process(web_client,add_source(web_client,url='https://source.example/',max_pages=1))
+    assert one['status']=='completed' and [p['url'] for p in one['items']]==['https://source.example/detail/0']
+    def bare(url,base,robots=None,relaxed=False,**kw):
+        if url.endswith('robots.txt'):return url,'',b'','text/plain'
+        if url.endswith('.xml'):raise websearch.HttpStatus(404)
+        html='<title>Beranda</title><p>港口设备故障导致原料延迟七天，库存仅能维持三天生产。</p>'
+        return url,html,html.encode(),'text/html'
+    monkeypatch.setattr(websearch,'fetch_page',bare)
+    only_home=process(web_client,add_source(web_client,url='https://source.example/',max_pages=2))
     assert only_home['status']=='completed' and [p['url'] for p in only_home['items']]==['https://source.example/']
 
 def test_changed_review_standard_does_not_reuse_old_verdicts(web_client,monkeypatch):
