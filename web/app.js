@@ -242,7 +242,7 @@ function bind(){
   });
   $('#knowledge-search')?.addEventListener('submit',async e=>{
     e.preventDefault();const q=new FormData(e.currentTarget).get('q');
-    try{const data=await api('/knowledge/search?q='+encodeURIComponent(q));$('#knowledge-results').innerHTML=`<section class="panel"><div class="panel-heading"><h2>检索结果</h2><small>${data.items.length} 个片段</small></div>${data.items.length?data.items.map(r=>`<article class="search-hit"><h3>${esc(r.title)}</h3><p>${esc(r.text)}</p><small>${esc(r.locator)} · 匹配分数 ${r.score}</small><br>${sourceButton(r.document_id,'查看原文')}</article>`).join(''):empty('没有匹配的片段','尝试使用资料中的关键词，或先导入相关知识。')}</section>`;$$('[data-source]',$('#knowledge-results')).forEach(b=>b.onclick=()=>showSource(b.dataset.source));}catch(err){toast(err.message);}
+    try{const data=await api('/knowledge/search?q='+encodeURIComponent(q));$('#knowledge-results').innerHTML=`<section class="panel"><div class="panel-heading"><h2>检索结果</h2><small>${data.items.length} 个片段</small></div>${data.items.length?data.items.map(r=>`<article class="search-hit"><h3>${esc(r.title)}</h3>${r.zh_summary?`<p class="hit-summary"><strong>中文摘要</strong>${esc(r.zh_summary)}${r.zh_keywords?`<br><small>关键词：${esc(r.zh_keywords)}</small>`:''}</p>`:''}<p>${esc(r.text)}</p><small>${esc(r.locator)} · 匹配分数 ${r.score}</small><br>${sourceButton(r.document_id,'查看原文')}</article>`).join(''):empty('没有匹配的片段','尝试使用资料中的关键词，或先导入相关知识。')}</section>`;$$('[data-source]',$('#knowledge-results')).forEach(b=>b.onclick=()=>showSource(b.dataset.source));}catch(err){toast(err.message);}
   });
 }
 $('#close-source').onclick=()=>$('#source-dialog').close();

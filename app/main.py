@@ -20,6 +20,7 @@ from .store import Store, now, DEFAULT_RULES
 from .ingest import parse_file, insert_document
 from .jobs import Worker
 from .retrieval import retrieve
+from .enrich import Enricher
 from .demo import seed
 from . import model
 from . import companies
@@ -62,18 +63,22 @@ def create_app(settings=None, run_worker=True):
     worker=Worker(store,settings)
     initialize_websearch(store)
     collector=Collector(store,settings)
+    enricher=Enricher(store,settings)
     login_attempts={}
     @asynccontextmanager
     async def lifespan(app):
         if run_worker:
             worker.start()
             collector.start()
+            enricher.start()
         yield
         await worker.stop()
         await collector.stop()
+        await enricher.stop()
     app=FastAPI(title='海外投资风险工作台',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.store=store; app.state.worker=worker; app.state.settings=settings
     app.state.collector=collector
+    app.state.enricher=enricher
     app.include_router(websearch_router(store,settings))
     app.include_router(companies.router(store))
 
@@ -284,7 +289,7 @@ def create_app(settings=None, run_worker=True):
     @app.get('/api/knowledge/search')
     def knowledge_search(q:str=''):
         if not q.strip(): return {'items':[]}
-        return {'items':retrieve(store,q,limit=8)}
+        return {'items':retrieve(store,q,limit=8,per_document=True)}
 
     @app.post('/api/jobs')
     def enqueue(data:JobRequest):

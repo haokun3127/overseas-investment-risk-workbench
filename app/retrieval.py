@@ -8,9 +8,9 @@ def tokens(text):
         words.extend(phrase[i:i+2] for i in range(len(phrase)-1))
     return words
 
-def retrieve(store, query, external=False, limit=4, company_id=None):
+def retrieve(store, query, external=False, limit=4, company_id=None, per_document=False):
     condition = ' AND d.allow_external=1' if external else ''
-    rows = store.rows('''SELECT c.id,c.document_id,c.locator,c.text,d.title,d.source,d.date FROM chunks c
+    rows = store.rows('''SELECT c.id,c.document_id,c.locator,c.text,d.title,d.source,d.date,d.zh_summary,d.zh_keywords FROM chunks c
         JOIN documents d ON d.id=c.document_id WHERE d.kind='knowledge' AND d.demo=0''' + condition)
     # Company profiles are references only for their own selected company.
     scoped=store.rows('SELECT document_id,id FROM companies WHERE document_id IS NOT NULL') if store.one("SELECT name FROM sqlite_master WHERE type='table' AND name='companies'") else []
@@ -20,7 +20,9 @@ def retrieve(store, query, external=False, limit=4, company_id=None):
     if not rows:
         return []
     query_terms = set(tokens(query))
-    counters = [Counter(tokens(row['title'] + ' ' + row['text'])) for row in rows]
+    # The Chinese summary and keywords (app/enrich.py) let Chinese queries reach foreign-language sources; they
+    # only steer the ranking, the hit itself is always an original chunk.
+    counters = [Counter(tokens(' '.join((row['title'], row['zh_keywords'], row['zh_summary'], row['text'])))) for row in rows]
     average = sum(sum(c.values()) for c in counters) / max(len(counters),1) or 1
     frequency = Counter(term for c in counters for term in c)
     ranked = []
@@ -33,4 +35,9 @@ def retrieve(store, query, external=False, limit=4, company_id=None):
         if score > 0:
             row['score'] = round(score,3)
             ranked.append(row)
-    return sorted(ranked,key=lambda r:r['score'],reverse=True)[:limit]
+    ranked.sort(key=lambda r:r['score'],reverse=True)
+    if per_document:
+        seen=set();ranked=[r for r in ranked if not (r['document_id'] in seen or seen.add(r['document_id']))]
+    else:
+        for row in ranked: row.pop('zh_summary');row.pop('zh_keywords')  # analysis references carry original text only
+    return ranked[:limit]

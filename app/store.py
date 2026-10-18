@@ -54,6 +54,9 @@ class Store:
                 id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id),
                 status TEXT NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL);
             ''')
+            columns = {row['name'] for row in db.execute('PRAGMA table_info(documents)')}
+            for column, ddl in (('zh_summary', "TEXT NOT NULL DEFAULT ''"), ('zh_keywords', "TEXT NOT NULL DEFAULT ''"), ('zh_state', "TEXT NOT NULL DEFAULT ''")):
+                if column not in columns: db.execute(f'ALTER TABLE documents ADD COLUMN {column} {ddl}')
             db.execute('INSERT OR IGNORE INTO settings VALUES (?,?)', ('rules', json.dumps(DEFAULT_RULES, ensure_ascii=False)))
             db.execute("UPDATE jobs SET status='failed', error='服务重启中断了任务，请重试。', finished_at=? WHERE status='running'", (now(),))
 

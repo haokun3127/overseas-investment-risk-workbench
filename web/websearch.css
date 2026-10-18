@@ -106,3 +106,6 @@ button:disabled {cursor:not-allowed;}
 .web-hint{display:block;margin-top:6px;padding:6px 10px;border-left:3px solid var(--orange);background:var(--surface-raised);color:var(--ink);font-size:12px;line-height:1.5;}
 .web-pager{display:flex;align-items:center;justify-content:center;gap:12px;padding:14px 0 4px;color:var(--muted);font-size:13px;}
 .text-button.danger{color:var(--red);}
+.hit-summary{margin:6px 0 8px;padding:8px 12px;border-radius:8px;background:var(--surface-raised);font-size:13px;line-height:1.6}
+.hit-summary strong{margin-right:8px;color:var(--accent)}
+.hit-summary small{color:var(--muted)}
