@@ -309,6 +309,17 @@ def archived_page(url):
         raise ValueError('网页存档中没有可用快照。')
     stamp=snap['timestamp']
     _,text,raw,ctype=archive_get('https://web.archive.org/web/'+stamp+'id_/'+url,'https://web.archive.org/web/')
+    if 'html' in ctype.lower() and len(html_text(text).strip())<200:
+        # The newest capture is a script shell (its JS bundles are rarely archived): take the largest of the
+        # recent captures instead, which is often an earlier server-rendered version of the same page.
+        try:
+            _,index,_,_=archive_get('https://web.archive.org/cdx/search/cdx?'+urlencode([('url',url),('output','json'),('filter','statuscode:200'),('filter','mimetype:text/html'),('fl','timestamp,length'),('limit','-40')]),'https://web.archive.org/cdx/',relaxed=True)
+            rows=[r for r in json.loads(index)[1:] if r[0]!=stamp and r[1].isdigit()]
+            if rows:
+                best=max(rows,key=lambda r:int(r[1]))[0]
+                _,richer,data,kind=archive_get('https://web.archive.org/web/'+best+'id_/'+url,'https://web.archive.org/web/')
+                if len(html_text(richer).strip())>len(html_text(text).strip()): stamp,text,raw,ctype=best,richer,data,kind
+        except (ValueError,TypeError,IndexError): pass
     return stamp[:4]+'-'+stamp[4:6]+'-'+stamp[6:8],text,raw,ctype
 
 CHALLENGE=re.compile(r'just a moment|attention required|checking your browser|access denied|enable javascript and cookies|security verification|verify you are (a )?human|verifikasi keamanan|memverifikasi|请完成安全验证|人机验证',re.I)

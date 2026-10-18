@@ -531,3 +531,16 @@ def test_challenge_pages_in_other_languages_are_recognised():
     for text in ('Melakukan verifikasi keamanan','Performing security verification','Verify you are human','Just a moment...'):
         assert websearch.CHALLENGE.search(text)
     assert not websearch.CHALLENGE.search('Peraturan Menteri Ketenagakerjaan tentang tenaga kerja asing')
+
+def test_archive_prefers_richest_capture_when_newest_is_a_shell(monkeypatch):
+    def get(url,base,relaxed=False):
+        if 'wayback/available' in url:
+            return url,json.dumps({'archived_snapshots':{'closest':{'available':True,'status':'200','timestamp':'20260415000000'}}}),b'','application/json'
+        if '/cdx/search/cdx' in url:
+            return url,json.dumps([['timestamp','length'],['20260415000000','7000'],['20260226000000','35000'],['20251027000000','30000']]),b'','application/json'
+        if '/web/20260415000000id_/' in url: return url,'<div id="app"></div>',b'shell','text/html'
+        if '/web/20260226000000id_/' in url: return url,'<title>Kemenkum</title><p>'+'Berita hukum '*30+'</p>',b'rich','text/html'
+        raise AssertionError(url)
+    monkeypatch.setattr(websearch,'archive_get',get)
+    date,text,raw,ctype=websearch.archived_page('https://kemenkum.go.id/')
+    assert date=='2026-02-26' and raw==b'rich'
