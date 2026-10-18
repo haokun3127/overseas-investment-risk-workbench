@@ -619,3 +619,8 @@ def test_quote_check_ignores_whitespace_and_width_but_not_words(web_client,monke
     monkeypatch.setattr(websearch.model,'call_model',model_quote('The Parties shall protect "investment"'))
     run=process(web_client,add_source(web_client,max_pages=1))
     assert run['items'][0]['relevant'] is None  # different words are still rejected
+
+def test_page_dates_are_normalised_for_import():
+    assert websearch.normal_date('Thu, 06 Mar 1980 00:00:00 +0000')=='1980-03-06'
+    assert websearch.normal_date('2026-08-03T00:00:00Z')=='2026-08-03'
+    assert websearch.normal_date('2026-02-30')=='' and websearch.normal_date('kemarin')=='' and websearch.normal_date(None)==''

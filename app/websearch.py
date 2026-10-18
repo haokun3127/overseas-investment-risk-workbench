@@ -418,6 +418,21 @@ def loose(text):
     quotes do not count (models reflow PDF and RSS text)."""
     return ' '.join(unicodedata.normalize('NFKC',text).translate(QUOTE_MARKS).split())
 
+def normal_date(value):
+    """YYYY-MM-DD from ISO, RFC 822 (RSS pubDate) or similar dates; '' when it cannot be read."""
+    value=(value or '').strip()
+    m=re.match(r'(\d{4})-(\d{2})-(\d{2})',value)
+    if m: candidate=m.group(0)
+    else:
+        try:
+            from email.utils import parsedate_to_datetime
+            candidate=parsedate_to_datetime(value).date().isoformat()
+        except (TypeError,ValueError,IndexError): return ''
+    try:
+        from datetime import date
+        date.fromisoformat(candidate);return candidate
+    except ValueError: return ''
+
 UNJUDGED='AI 未给出可核验的判定（格式无效或引用无法在原文中定位），请查看原文后人工处理。'
 
 def site_root(url):
@@ -693,7 +708,7 @@ def transfer(store,settings,page_ids,kind,analyze=False):
     for page,source in pages:
         imports=json.loads(page['imports_json'])
         for target in (['knowledge','event'] if kind=='both' else [kind]):
-            doc_id,created=insert_document(store,{'title':page['title'],'body':page['body'],'url':page['url'],'source':source['name'],'date':page['date']},target,bool(source['allow_external']),file_path=page['snapshot'],filename='website-snapshot'+Path(page['snapshot']).suffix)
+            doc_id,created=insert_document(store,{'title':page['title'],'body':page['body'],'url':page['url'],'source':source['name'],'date':normal_date(page['date'])},target,bool(source['allow_external']),file_path=page['snapshot'],filename='website-snapshot'+Path(page['snapshot']).suffix)
             imports[target]=doc_id
             job_id=None
             if analyze and target=='event':
@@ -750,7 +765,7 @@ class Collector:
         snapshot='web-'+str(run_id)+'-'+hashlib.sha256(url.encode()).hexdigest()[:12]+'-'+hashlib.sha256(raw).hexdigest()[:16]+ext
         (self.store.directory/'uploads'/snapshot).write_bytes(raw)
         with self.store.db() as db:
-            page_id=db.execute('INSERT INTO web_pages(run_id,url,title,body,date,fetched_at,digest,snapshot) VALUES (?,?,?,?,?,?,?,?)',(run_id,url,title[:230],body,date[:40],now(),digest,snapshot)).lastrowid
+            page_id=db.execute('INSERT INTO web_pages(run_id,url,title,body,date,fetched_at,digest,snapshot) VALUES (?,?,?,?,?,?,?,?)',(run_id,url,title[:230],body,normal_date(date),now(),digest,snapshot)).lastrowid
         page={'id':page_id,'title':title[:230],'body':body,'url':url,'digest':digest}
         # Same source, same keywords, byte-identical text already judged in an earlier run: reuse that verdict
         # instead of paying for the model again.
