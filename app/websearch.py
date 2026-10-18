@@ -315,6 +315,17 @@ CHALLENGE=re.compile(r'just a moment|attention required|checking your browser|ac
 SKIP_LINK=re.compile(r'(login|logout|signin|sign-in|signup|register|masuk|daftar|authenticate|/_layouts/|wp-admin|wp-login|/akun|/cart|whatsapp|facebook\.com|twitter\.com|linkedin\.com|/share|print=|\.(zip|rar|jpe?g|png|gif|svg|exe|docx?|xlsx?|pptx?|mp4|mp3)(\?|$))',re.I)
 DETAIL_LINK=re.compile(r'(\.pdf(\?|$)|peraturan/|putusan|perkara|detail|download|unduh|/uu-|nomor|tahun-\d{4}|/\d{4}/\d{2}/|/pages/|pengumuman/|siaran-pers/|berita/)',re.I)
 
+def review_window(body,keywords,size=6000):
+    """The size-character stretch of the page with the most keyword hits (the opening if none), so long
+    documents are judged on their relevant part rather than on boilerplate at the top."""
+    if len(body)<=size: return body
+    terms=[t.lower() for t in re.split(r'[,，;；\s]+',keywords) if len(t)>1]
+    lower=body.lower();best,start=0,0
+    for offset in range(0,len(body)-size+1000,1000):
+        hits=sum(lower.count(t,offset,offset+size) for t in terms)
+        if hits>best: best,start=hits,offset
+    return body[start:start+size]
+
 UNJUDGED='AI 未给出可核验的判定（格式无效或引用无法在原文中定位），请查看原文后人工处理。'
 
 def site_root(url):
@@ -620,7 +631,7 @@ class Collector:
         """Verdicts by page id. Malformed items and quotes that cannot be found in the page are dropped
         (never trusted); model/service errors still fail the run."""
         # Bounded original text windows preserve quotes. No model-generated URLs are accepted.
-        snippets={p['id']:p['body'][:6000] for p in batch}
+        snippets={p['id']:review_window(p['body'],source['keywords']) for p in batch}
         result,used=await model.call_model(self.settings,{'keywords':source['keywords'],'pages':[{'id':p['id'],'title':p['title'],'body':snippets[p['id']]} for p in batch]},system=SEARCH_SYSTEM)
         usage.append(used)
         items=result.get('items') if isinstance(result,dict) else None

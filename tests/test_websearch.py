@@ -480,3 +480,10 @@ def test_script_pages_use_isolated_renderer(web_client,monkeypatch):
     monkeypatch.setattr(websearch,'render_page',lambda url:('https://other.example/','<title>x</title><p>'+'外站内容'*20+'</p>'))
     run=process(web_client,add_source(web_client,max_pages=1))
     assert run['status']=='failed' and '动态渲染' in run['errors'][0]['error']  # rendered page left the scope: ignored
+
+def test_review_window_targets_keyword_dense_part():
+    body='boilerplate '*1000+'entity list Indonesia sanctions entity list '*20+'tail '*2000
+    window=websearch.review_window(body,'entity list Indonesia 制裁')
+    assert len(window)==6000 and 'entity list Indonesia' in window
+    assert websearch.review_window('short text','x')=='short text'
+    assert websearch.review_window('a'*9000,'zzz')=='a'*6000
