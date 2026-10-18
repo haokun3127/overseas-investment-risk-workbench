@@ -3,6 +3,15 @@ import json
 from urllib.parse import urlparse
 import httpx
 
+def loopback_proxy(value):
+    """Optional route for model traffic: only a plain HTTP proxy on this machine (TLS stays end-to-end)."""
+    value = (value or '').strip()
+    if not value: return None
+    u = urlparse(value)
+    if u.scheme != 'http' or u.hostname not in ('127.0.0.1', 'localhost', '::1') or not u.port or u.username or u.path not in ('', '/'):
+        raise ValueError('MODEL_PROXY 只能是本机 HTTP 代理，例如 http://127.0.0.1:7890')
+    return value
+
 PROMPT_VERSION = 'risk-evidence-v1'
 SYSTEM = '''你是海外投资风险分析助手，范围是企业在印度尼西亚投资与经营，行业以 scope 和 company 为准。
 公司档案仅作为业务背景，不把企业描述本身当作风险事件证据。根据其地区、行业、阶段与供应链说明事件对该公司的适用性；缺少档案则说明适用性待核实。
@@ -49,7 +58,7 @@ async def call_model(settings, payload, system=SYSTEM):
             request['response_format'] = {'type':'json_object'}
     endpoint = '/responses' if responses else '/chat/completions'
     headers = {'Authorization':f'Bearer {settings.model_api_key}'} if settings.model_api_key else {}
-    async with httpx.AsyncClient(timeout=settings.model_timeout,follow_redirects=False,trust_env=False) as client:
+    async with httpx.AsyncClient(timeout=settings.model_timeout,follow_redirects=False,trust_env=False,proxy=loopback_proxy(getattr(settings,'model_proxy',''))) as client:
         for attempt in range(3):
             try:
                 response = await client.post(settings.model_base_url+endpoint,json=request,headers=headers)

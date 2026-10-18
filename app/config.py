@@ -17,6 +17,7 @@ class Settings:
     model_reasoning_effort: str = os.getenv('MODEL_REASONING_EFFORT', '')
     model_store: bool = os.getenv('MODEL_STORE', 'false').lower() == 'true'
     model_timeout: float = float(os.getenv('MODEL_TIMEOUT', '90'))
+    model_proxy: str = os.getenv('MODEL_PROXY', '')
     model_json_mode: bool = os.getenv('MODEL_JSON_MODE', 'true').lower() == 'true'
     secure_cookie: bool = os.getenv('SECURE_COOKIE', 'false').lower() == 'true'
     cookie_path: str = os.getenv('COOKIE_PATH', '/')

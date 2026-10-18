@@ -352,3 +352,9 @@ def test_unreachable_robots_uses_archive_and_rebase_keeps_page_budget(web_client
     monkeypatch.setattr(websearch,'fetch_page',moved)
     run=process(web_client,add_source(web_client,max_pages=1))
     assert run['status']=='completed' and run['items'][0]['url']=='https://source.example/id/news/'
+
+def test_model_proxy_accepts_only_loopback_http():
+    from app import model
+    assert model.loopback_proxy('') is None and model.loopback_proxy('http://127.0.0.1:7890')=='http://127.0.0.1:7890'
+    for bad in ('http://10.0.0.2:7890','https://127.0.0.1:7890','socks5://127.0.0.1:7890','http://127.0.0.1'):
+        with pytest.raises(ValueError):model.loopback_proxy(bad)
