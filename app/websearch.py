@@ -293,12 +293,12 @@ def render_page(url):
     return data.get('url') or url,data['html']
 
 def archive_get(url,base,relaxed=False):
-    """archive.org through the proxy drops connections now and then: retry once after a short pause."""
-    for attempt in range(2):
+    """archive.org through the proxy drops connections and times out under load: up to three attempts."""
+    for attempt in range(3):
         try: return fetch_page(url,base,relaxed=relaxed)
         except ValueError as error:
-            if attempt or '网页连接失败' not in str(error): raise
-            time.sleep(2)
+            if attempt==2 or not re.search(r'网页连接失败|HTTP 50[234]',str(error)): raise
+            time.sleep(2+3*attempt)
 
 def archived_page(url):
     """Latest Internet Archive capture, raw (id_) so links and text are the original page's."""
@@ -325,6 +325,52 @@ def review_window(body,keywords,size=6000):
         hits=sum(lower.count(t,offset,offset+size) for t in terms)
         if hits>best: best,start=hits,offset
     return body[start:start+size]
+
+def xml_text(value):
+    return html_text(re.sub(r'<!\[CDATA\[(.*?)\]\]>',lambda m:m.group(1),value or '',flags=re.S))
+
+def feed_pages(base,robots,max_pages):
+    """RSS/Atom items of a site whose pages are blocked but whose feed is not (WordPress /feed/ etc.)."""
+    root=site_root(base)
+    for path in ('feed/','rss','rss.xml','feed.xml','atom.xml'):
+        url=urljoin(root,path)
+        if not robots.can_fetch(url): continue
+        try: _,text,raw,_=fetch_page(url,url,relaxed=True,limit=3*MAX_BYTES)
+        except ValueError: continue
+        if not re.search(r'<(rss|feed)[\s>]',text[:3000]): continue
+        items=[]
+        for block in re.findall(r'<(?:item|entry)[\s>].*?</(?:item|entry)>',text,re.S)[:max_pages]:
+            def tag(name):
+                m=re.search(r'<'+name+r'(?:\s[^>]*)?>(.*?)</'+name+'>',block,re.S);return m.group(1).strip() if m else ''
+            link=tag('link') or (re.search(r'<link[^>]+href="([^"]+)"',block) or [None,''])[1]
+            body=xml_text(tag('content:encoded') or tag('content') or tag('description') or tag('summary'))
+            title=xml_text(tag('title'))
+            if not link or len(body.strip())<20: continue
+            try: link=clean_url(urljoin(root,link.strip()))
+            except ValueError: continue
+            if urlsplit(link).hostname!=urlsplit(base).hostname or not robots.can_fetch(link): continue
+            date=tag('pubDate') or tag('published') or tag('updated')
+            items.append((link,'［RSS］'+(title or link),body,date[:40],block.encode(),'text/xml'))
+        if items: return items
+    return []
+
+def sitemap_links(base,robots,terms,limit=300):
+    """In-scope URLs from the site's sitemaps whose address mentions a keyword (detail pages the menus hide)."""
+    queue=list(dict.fromkeys(robots.sitemaps+[urljoin(site_root(base),'sitemap.xml')]))[:3];found=[];reads=0
+    while queue and reads<6 and len(found)<limit:
+        url=queue.pop(0);reads+=1
+        if not robots.can_fetch(url): continue
+        try: _,text,_,_=fetch_page(url,url,relaxed=True,limit=3*MAX_BYTES)
+        except ValueError: continue
+        for loc in re.findall(r'<loc>\s*([^<\s]+)\s*</loc>',text)[:5000]:
+            loc=loc.replace('&amp;','&')
+            if loc.endswith('.xml') or '.xml?' in loc:
+                if len(queue)<5: queue.append(loc)
+                continue
+            try: link=clean_url(loc)
+            except ValueError: continue
+            if in_scope(link,base) and not SKIP_LINK.search(link) and link_score(link,'',terms)>2: found.append(link)
+    return found[:limit]
 
 UNJUDGED='AI 未给出可核验的判定（格式无效或引用无法在原文中定位），请查看原文后人工处理。'
 
@@ -482,9 +528,14 @@ def world_bank(base,keywords,max_pages):
     if not items: raise ValueError('世界银行接口没有找到匹配的文献，请调整英文关键词。')
     return items
 
+def uflpa_list(base,keywords,max_pages):
+    """DHS/CBP UFLPA Entity List pages block crawlers; the list itself is published in the Federal Register."""
+    return federal_register('https://www.federalregister.gov/','UFLPA Entity List',max_pages)
+
 def api_connector(url):
     u=urlsplit(url);host=(u.hostname or '').removeprefix('www.')
     if host=='federalregister.gov': return federal_register
+    if host in ('dhs.gov','cbp.gov') and re.search(r'uflpa',u.path,re.I): return uflpa_list
     if host=='ecfr.gov': return ecfr
     if host in ('documents.worldbank.org','openknowledge.worldbank.org') or (host=='worldbank.org' and re.match(r'/(en/)?(publication|research|country)',u.path)): return world_bank
     if host in ('sanctionslist.ofac.treas.gov','sanctionssearch.ofac.treas.gov') or re.search(r'specially-designated-nationals|consolidated-sanctions-list|sdn-list',u.path,re.I): return ofac_sdn
@@ -686,6 +737,10 @@ class Collector:
                     robots=Robots();live=False;live_error=str(error)
             pending=[] if connector else [base];seen=set();scores={};rebased=0
             terms=[t for t in re.split(r'[,，;；\s]+',source['keywords']) if t]
+            if live and not connector and source['max_pages']>1 and robots.can_fetch(base):
+                for link in await asyncio.to_thread(sitemap_links,base,robots,terms):
+                    if link not in scores: scores[link]=link_score(link,'',terms);pending.append(link)
+                pending[1:]=sorted(pending[1:],key=lambda link:-scores.get(link,0))
             while pending and len(seen)<source['max_pages']:
                 if self.cancelled(run_id): return
                 url=pending.pop(0)
@@ -713,10 +768,15 @@ class Collector:
                     parser=PageParser()
                     if 'html' in ctype.lower(): parser.feed(text);title,body=parser.result()
                     else: title,body=unquote(Path(urlsplit(final).path).name) or final,text
-                    if RENDERER and not archived and 'html' in ctype.lower() and len(body.strip())<200:
-                        # Text is built by scripts: let the isolated headless browser render it (no challenge solving).
+                    if RENDERER and 'html' in ctype.lower() and len(body.strip())<200:
+                        # Text is built by scripts: let the isolated headless browser render it (no challenge
+                        # solving). Archived shells are rendered from the Wayback replay of the same capture.
                         try:
-                            shown,html=await asyncio.to_thread(render_page,final)
+                            target='https://web.archive.org/web/'+archived.replace('-','')+'if_/'+final if archived else final
+                            shown,html=await asyncio.to_thread(render_page,target)
+                            if not archived and url==base and not in_scope(clean_url(shown),base) and urlsplit(shown).hostname==urlsplit(base).hostname:
+                                base=clean_url(shown)  # the entry moved once scripts ran (e.g. /beijing -> /id/beijing)
+                            if archived: shown=final
                             if in_scope(clean_url(shown),base) and robots.can_fetch(shown):
                                 rendered=PageParser();rendered.feed(html);r_title,r_body=rendered.result()
                                 if len(r_body.strip())>len(body.strip()) and not CHALLENGE.search(r_title+' '+r_body[:500]):
@@ -739,6 +799,9 @@ class Collector:
                 delay=max(1,robots.crawl_delay() or 1)
                 if delay>30: raise ValueError('网站要求较长采集间隔，请联系站点管理员后调整采集方式。')
                 await asyncio.sleep(delay)
+            if not pages and not connector and robots.can_fetch(base):
+                # Pages blocked but the site's RSS/Atom feed open (e.g. WordPress /feed/): use its items.
+                for item in await asyncio.to_thread(feed_pages,base,robots,source['max_pages']): self.keep(run_id,pages,*item)
             if not pages: raise ValueError('未采集到可检索正文，请查看逐页失败原因或更换入口。')
             usage=[];fresh=[p for p in pages if not p.get('reused')]
             for start in range(0,len(fresh),4):

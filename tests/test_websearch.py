@@ -28,7 +28,7 @@ def add_source(c,**extra):
     assert r.status_code==200,r.text
     return r.json()['id']
 
-def fake_fetch(url,base,robots=None,relaxed=False):
+def fake_fetch(url,base,robots=None,relaxed=False,**kw):
     if url.endswith('robots.txt'):
         return url,'User-agent: *\nDisallow: /private/\n',b'','text/plain'
     if url.endswith('/news/'):
@@ -85,7 +85,7 @@ def test_search_failure_does_not_auto_import(web_client,monkeypatch):
 
 def test_robots_and_scope_stop_fetching(web_client,monkeypatch):
     calls=[]
-    def blocked(url,base,robots=None,relaxed=False):
+    def blocked(url,base,robots=None,relaxed=False,**kw):
         calls.append(url)
         return url,'User-agent: *\nDisallow: /news/\n',b'','text/plain'
     monkeypatch.setattr(websearch,'fetch_page',blocked)
@@ -166,8 +166,9 @@ def test_scheduler_runs_due_source_and_recovers_interrupted_run(web_client,monke
 
 def test_snapshots_do_not_overwrite_when_redirected_page_changes(web_client,monkeypatch):
     raws=[]
-    def changing(url,base,robots=None,relaxed=False):
+    def changing(url,base,robots=None,relaxed=False,**kw):
         if url.endswith('robots.txt'):return fake_fetch(url,base,robots)
+        if url.endswith('.xml'):raise websearch.HttpStatus(404)
         html='<title>原料供应通报</title><p>港口设备故障导致生产原料供应中断，库存只够三天。这是第'+str(len(raws)+1)+'版。</p><a href="/news/alias">其他入口</a>'
         raws.append(html.encode())
         return base,html,raws[-1],'text/html'
@@ -245,7 +246,7 @@ def test_robots_follow_rfc9309_longest_match():
 
 def test_robots_4xx_is_unrestricted_but_5xx_stops(monkeypatch):
     def status(code):
-        def fetch(url,base,robots=None,relaxed=False):raise websearch.HttpStatus(code)
+        def fetch(url,base,robots=None,relaxed=False,**kw):raise websearch.HttpStatus(code)
         return fetch
     monkeypatch.setattr(websearch,'fetch_page',status(403))
     assert websearch.load_robots('https://x.example/').can_fetch('https://x.example/anything')
@@ -254,7 +255,7 @@ def test_robots_4xx_is_unrestricted_but_5xx_stops(monkeypatch):
 
 def test_long_pages_are_truncated_and_entry_redirect_becomes_scope(web_client,monkeypatch):
     calls=[]
-    def moved(url,base,robots=None,relaxed=False):
+    def moved(url,base,robots=None,relaxed=False,**kw):
         calls.append((url,base))
         if url.endswith('robots.txt'):return url,'User-agent: *\nDisallow: /private/\n',b'','text/plain'
         if url=='https://source.example/news/':raise websearch.OutOfScope('https://source.example/id/berita/')
@@ -271,7 +272,7 @@ def test_long_pages_are_truncated_and_entry_redirect_becomes_scope(web_client,mo
 
 def test_unreachable_page_falls_back_to_internet_archive(web_client,monkeypatch):
     monkeypatch.setattr(websearch,'ARCHIVE_FALLBACK',True)
-    def blocked(url,base,robots=None,relaxed=False):
+    def blocked(url,base,robots=None,relaxed=False,**kw):
         if url.endswith('robots.txt'):raise websearch.HttpStatus(403)
         raise websearch.HttpStatus(403)
     def archive(url):
@@ -337,7 +338,7 @@ def test_compressed_bodies_and_archive_hosts_skip_local_dns(monkeypatch):
 
 def test_unreachable_robots_uses_archive_and_rebase_keeps_page_budget(web_client,monkeypatch):
     monkeypatch.setattr(websearch,'ARCHIVE_FALLBACK',True)
-    def down(url,base,robots=None,relaxed=False):raise ValueError('网页连接失败：SSLEOFError')
+    def down(url,base,robots=None,relaxed=False,**kw):raise ValueError('网页连接失败：SSLEOFError')
     def archive(url):
         html='<title>原料供应通报</title><p>港口设备故障导致原料延迟七天，库存仅能维持三天。</p>'
         return '2026-04-15',html,html.encode(),'text/html'
@@ -345,7 +346,7 @@ def test_unreachable_robots_uses_archive_and_rebase_keeps_page_budget(web_client
     monkeypatch.setattr(websearch.model,'call_model',fake_model)
     run=process(web_client,add_source(web_client,max_pages=1))
     assert run['status']=='completed' and run['items'][0]['title'].startswith('［网页存档 2026-04-15］')
-    def moved(url,base,robots=None,relaxed=False):
+    def moved(url,base,robots=None,relaxed=False,**kw):
         if url.endswith('robots.txt'):raise websearch.HttpStatus(404)
         if url=='https://source.example/news/':raise websearch.OutOfScope('https://source.example/id/news/')
         return fake_fetch(url,base)
@@ -465,7 +466,7 @@ def test_world_bank_connector(monkeypatch):
 def test_script_pages_use_isolated_renderer(web_client,monkeypatch):
     with pytest.raises(ValueError):websearch.loopback_renderer('http://10.0.0.3:8791/render')
     assert websearch.loopback_renderer('http://127.0.0.1:8791/render')==('127.0.0.1',8791,'/render')
-    def shell(url,base,robots=None,relaxed=False):
+    def shell(url,base,robots=None,relaxed=False,**kw):
         if url.endswith('robots.txt'):return url,'User-agent: *\nDisallow: /private/\n',b'','text/plain'
         html='<html><title>JS</title><div id="app"></div><script src="app.js"></script></html>'
         return url,html,html.encode(),'text/html'
@@ -487,3 +488,31 @@ def test_review_window_targets_keyword_dense_part():
     assert len(window)==6000 and 'entity list Indonesia' in window
     assert websearch.review_window('short text','x')=='short text'
     assert websearch.review_window('a'*9000,'zzz')=='a'*6000
+
+def test_feed_fallback_sitemaps_uflpa_and_archived_render(web_client,monkeypatch):
+    assert websearch.api_connector('https://www.dhs.gov/uflpa-entity-list') is websearch.uflpa_list
+    feed='<?xml version="1.0"?><rss><channel><item><title>ASEAN Agreement on Investment</title><link>https://source.example/news/acia</link><pubDate>Mon, 01 Jun 2026</pubDate><content:encoded><![CDATA[<p>港口设备故障导致原料延迟七天，库存仅能维持三天生产。</p>]]></content:encoded></item></channel></rss>'
+    def blocked(url,base,robots=None,relaxed=False,**kw):
+        if url.endswith('robots.txt'):raise websearch.HttpStatus(404)
+        if url.endswith('/feed/'):return url,feed,feed.encode(),'application/rss+xml'
+        if url.endswith('sitemap.xml'):raise websearch.HttpStatus(404)
+        raise websearch.HttpStatus(403)
+    monkeypatch.setattr(websearch,'fetch_page',blocked);monkeypatch.setattr(websearch.model,'call_model',fake_model)
+    run=process(web_client,add_source(web_client,max_pages=2))
+    assert run['status']=='completed' and run['items'][0]['title']=='［RSS］ASEAN Agreement on Investment'
+    assert run['items'][0]['url']=='https://source.example/news/acia'
+    sitemap='<urlset><url><loc>https://source.example/news/2026/港口-原料-detail</loc></url><url><loc>https://source.example/news/kontak</loc></url><url><loc>https://other.example/港口</loc></url></urlset>'
+    monkeypatch.setattr(websearch,'fetch_page',lambda url,base,robots=None,relaxed=False,**kw:(url,sitemap,b'','application/xml'))
+    links=websearch.sitemap_links('https://source.example/news/',websearch.Robots(),['港口','原料'])
+    assert links==[websearch.clean_url('https://source.example/news/2026/港口-原料-detail')]
+    # A JS shell kept by the archive is rendered from the Wayback replay of the same capture.
+    monkeypatch.setattr(websearch,'ARCHIVE_FALLBACK',True);monkeypatch.setattr(websearch,'RENDERER',('127.0.0.1',8791,'/render'))
+    monkeypatch.setattr(websearch,'fetch_page',lambda url,base,robots=None,relaxed=False,**kw:(_ for _ in ()).throw(websearch.HttpStatus(403)))
+    monkeypatch.setattr(websearch,'archived_page',lambda url:('2026-04-15','<div id="app"></div>',b'<div></div>','text/html'))
+    asked=[]
+    def render(url):
+        asked.append(url);return url,'<title>法律部</title><article>港口设备故障导致原料延迟七天，库存仅能维持三天生产。</article>'
+    monkeypatch.setattr(websearch,'render_page',render)
+    run=process(web_client,add_source(web_client,max_pages=1))
+    assert run['status']=='completed' and asked==['https://web.archive.org/web/20260415if_/https://source.example/news/']
+    assert run['items'][0]['title']=='［网页存档 2026-04-15］法律部' and run['items'][0]['url']=='https://source.example/news/'
