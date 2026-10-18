@@ -10,6 +10,7 @@ import posixpath
 import re
 import socket
 import ssl
+import logging
 import time
 import zlib
 from html.parser import HTMLParser
@@ -32,6 +33,7 @@ MAX_PDF_BYTES = 15 * 1024 * 1024
 MAX_BODY = 60000
 TRUNCATED = '\n\n［正文过长，以下内容已截断］'
 ARCHIVE_FALLBACK = os.environ.get('WEB_ARCHIVE_FALLBACK', '1') != '0'
+logging.getLogger('pypdf').setLevel(logging.ERROR)  # malformed PDFs otherwise flood the service journal
 
 def loopback_proxy(value):
     """Optional fallback egress: only a plain HTTP CONNECT proxy on this machine is accepted."""
@@ -365,8 +367,8 @@ def feed_pages(base,robots,max_pages,terms=()):
         for link,title,body,date,raw in entries:
             if len(items)>=max_pages: break
             ctype='text/xml'
-            if len(body.strip())<200:
-                # Feed only lists the document (e.g. agreement PDFs): read the linked file itself.
+            if len(body.strip())<1500:
+                # Feed carries only a title or short summary (e.g. agreement PDFs): read the linked file itself.
                 try:
                     _,full,raw,kind=fetch_page(link,root,robots)
                     if 'html' in kind.lower(): full=html_text(full)
