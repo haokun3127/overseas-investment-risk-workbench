@@ -392,3 +392,10 @@ def test_api_connectors_route_and_parse(web_client,monkeypatch):
     sid=add_source(web_client,url='https://www.federalregister.gov/',keywords='港口 原料 Indonesia')
     run=process(web_client,sid)
     assert run['status']=='completed' and run['items'][0]['title']=='Rule：Entity List Additions'
+
+def test_https_host_header_has_no_default_port():
+    sent=[]
+    c=websearch.PinnedConnection('bucket.s3.amazonaws.com',443,'8.8.8.8',True)
+    c.send=lambda data:sent.append(data)
+    c.putrequest('GET','/file.csv?X-Amz-Signature=x');c.endheaders()
+    assert b'Host: bucket.s3.amazonaws.com\r\n' in sent[0]

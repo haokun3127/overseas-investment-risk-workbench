@@ -101,6 +101,9 @@ class PinnedConnection(http.client.HTTPConnection):
     hostname (mainland DNS answers for blocked sites are often poisoned), but the host was still checked
     locally first: a name that resolves to a private address is refused before any proxy use."""
     def __init__(self,host,port,ip,tls,proxy=None):
+        # HTTPConnection's default port is 80, so HTTPS requests sent "Host: name:443"; signed URLs (S3) and
+        # some WAFs reject that. Matching the scheme's default keeps the header to the bare hostname.
+        self.default_port=443 if tls else 80
         super().__init__(host,port,timeout=12)
         self.ip,self.tls,self.proxy=ip,tls,proxy
     def connect(self):
@@ -379,7 +382,8 @@ def ecfr(base,keywords,max_pages):
     _,text,raw,_=api_get('https://www.ecfr.gov/api/search/v1/results?'+urlencode(query),robots)
     items=[]
     for hit in json.loads(text).get('results') or []:
-        h=hit.get('hierarchy') or {};heads=hit.get('hierarchy_headings') or {};names=hit.get('headings') or {}
+        h=hit.get('hierarchy') or {};heads=hit.get('hierarchy_headings') or {}
+        names={k:re.sub(r'<[^>]+>','',v) for k,v in (hit.get('headings') or {}).items() if isinstance(v,str)}
         link='https://www.ecfr.gov/current/title-'+str(h.get('title'))+('/section-'+h['section'] if h.get('section') else '/part-'+str(h.get('part')))
         path=' > '.join(x.strip() for x in (heads.get('title'),heads.get('chapter'),heads.get('part'),heads.get('subpart'),heads.get('section')) if x)
         body=path+'\n'+(names.get('section') or names.get('part') or '')+'\n'+html_text(hit.get('full_text_excerpt'))
