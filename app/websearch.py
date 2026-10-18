@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import http.client
+import io
 import ipaddress
 import json
 import os
@@ -11,17 +12,23 @@ import socket
 import ssl
 import time
 from html.parser import HTMLParser
-from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
-from urllib.robotparser import RobotFileParser
+from pathlib import Path
+from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from pypdf import PdfReader
 from . import model
 from . import companies
 from .ingest import insert_document
 from .store import now
 
 AGENT = 'RiskWorkbenchBot'
+USER_AGENT = 'Mozilla/5.0 (compatible; RiskWorkbenchBot/1.1)'
 MAX_BYTES = 1024 * 1024
+MAX_PDF_BYTES = 15 * 1024 * 1024
+MAX_BODY = 60000
+TRUNCATED = '\n\n［正文过长，以下内容已截断］'
+ARCHIVE_FALLBACK = os.environ.get('WEB_ARCHIVE_FALLBACK', '1') != '0'
 
 def loopback_proxy(value):
     """Optional fallback egress: only a plain HTTP CONNECT proxy on this machine is accepted."""
@@ -87,21 +94,32 @@ def proxy_tunnel(proxy,target,port,timeout):
         sock.close();raise
 
 class PinnedConnection(http.client.HTTPConnection):
-    """Connects to a validated IP; via the fallback proxy the tunnel targets that IP, or the
-    hostname only when local DNS could not resolve it (the proxy then resolves remotely)."""
+    """Direct: connects only to the validated IP. Via the loopback fallback proxy the tunnel targets the
+    hostname (mainland DNS answers for blocked sites are often poisoned), but the host was still checked
+    locally first: a name that resolves to a private address is refused before any proxy use."""
     def __init__(self,host,port,ip,tls,proxy=None):
         super().__init__(host,port,timeout=12)
         self.ip,self.tls,self.proxy=ip,tls,proxy
     def connect(self):
-        if self.proxy: self.sock=proxy_tunnel(self.proxy,self.ip or self.host,self.port,self.timeout)
+        if self.proxy: self.sock=proxy_tunnel(self.proxy,self.host,self.port,self.timeout)
         else: self.sock=socket.create_connection((self.ip,self.port),self.timeout)
         if self.tls:
             self.sock=ssl.create_default_context().wrap_socket(self.sock,server_hostname=self.host)
 
+class HttpStatus(ValueError):
+    def __init__(self,status):
+        super().__init__('网站返回 HTTP '+str(status)+'。');self.status=status
+
+class OutOfScope(ValueError):
+    def __init__(self,target):
+        super().__init__('跳转或链接超出指定网站范围。');self.target=target
+
+HEADERS={'User-Agent':USER_AGENT,'Accept':'text/html,application/xhtml+xml,application/pdf;q=0.9,text/plain;q=0.8,*/*;q=0.5',
+         'Accept-Language':'id,en;q=0.9,zh-CN;q=0.8','Accept-Encoding':'identity'}
+
 def open_response(u,port):
     """Direct first; on unresolvable DNS, connection failure or HTTP 403, retry once via FETCH_PROXY."""
     path=urlunsplit(('','',u.path,u.query,''))
-    headers={'User-Agent':AGENT+'/1.0','Accept':'text/html,text/plain','Accept-Encoding':'identity'}
     def attempt(proxy):
         try: ip=public_address(u.hostname,port)
         except Unresolved:
@@ -109,7 +127,7 @@ def open_response(u,port):
             ip=None
         c=PinnedConnection(u.hostname,port,ip,u.scheme=='https',proxy)
         try:
-            c.request('GET',path,headers=headers);return c,c.getresponse()
+            c.request('GET',path,headers=HEADERS);return c,c.getresponse()
         except BaseException:
             c.close();raise
     try: c,r=attempt(None)
@@ -122,13 +140,28 @@ def open_response(u,port):
     except (Unresolved,OSError,http.client.HTTPException):
         raise ValueError('网站返回 HTTP 403，经备用出口重试也失败。')
 
-def fetch_page(url,base,robots=None):
+def pdf_text(raw):
+    try:
+        reader=PdfReader(io.BytesIO(raw))
+        if reader.is_encrypted and not reader.decrypt(''): raise ValueError('加密 PDF 无法读取。')
+        parts=[];size=0
+        for i,page in enumerate(reader.pages[:300]):
+            text=page.extract_text() or '';parts.append(f'[第{i+1}页]\n{text}');size+=len(text)
+            if size>MAX_BODY*2: break
+    except ValueError: raise
+    except Exception as error: raise ValueError('PDF 无法解析：'+type(error).__name__)
+    body='\n\n'.join(parts)
+    if len(re.sub(r'\[第\d+页\]|\s','',body))<20: raise ValueError('PDF 没有可提取的文字，可能是扫描件。')
+    return body
+
+def fetch_page(url,base,robots=None,relaxed=False):
     """No implicit redirects; every hop resolves and connects to a validated IP (optionally tunnelled
-    through the loopback fallback proxy)."""
+    through the loopback fallback proxy). relaxed: robots.txt / API reads that may redirect across hosts
+    and return any text type."""
     for _ in range(5):
         url=clean_url(url)
-        if not in_scope(url,base): raise ValueError('跳转或链接超出指定网站范围。')
-        if robots is not None and not robots.can_fetch(AGENT,url):raise ValueError('robots.txt 不允许采集此页。')
+        if not relaxed and not in_scope(url,base): raise OutOfScope(url)
+        if robots is not None and not robots.can_fetch(url):raise ValueError('robots.txt 不允许采集此页。')
         u=urlsplit(url);port=u.port or (443 if u.scheme=='https' else 80)
         try: c,r=open_response(u,port)
         except (OSError,http.client.HTTPException) as error:
@@ -136,15 +169,19 @@ def fetch_page(url,base,robots=None):
         try:
             if r.status in (301,302,303,307,308):
                 target=r.getheader('Location')
-                if not target: raise ValueError('网站重定向缺少目标。')
+                if not target: raise ValueError('网站启用了访问验证（重定向缺少目标）。')
                 url=urljoin(url,target);continue
-            if r.status!=200: raise ValueError('网站返回 HTTP '+str(r.status)+'。')
+            if r.status!=200: raise HttpStatus(r.status)
             if r.getheader('Content-Encoding','identity').lower()!='identity': raise ValueError('暂不支持压缩网页响应。')
             content_type=r.getheader('Content-Type','')
-            if not any(t in content_type.lower() for t in ('text/html','text/plain','application/xhtml+xml')):
-                raise ValueError('当前仅采集 HTML 或文本页面。')
-            raw=r.read(MAX_BYTES+1)
-            if len(raw)>MAX_BYTES: raise ValueError('网页超过1MB采集限制。')
+            kind=content_type.lower()
+            if 'application/pdf' in kind or ('octet-stream' in kind and re.search(r'\.pdf$',u.path,re.I)):
+                raw=r.read(MAX_PDF_BYTES+1)
+                if len(raw)>MAX_PDF_BYTES: raise ValueError('PDF 超过15MB采集限制。')
+                return url,pdf_text(raw),raw,'application/pdf'
+            if not relaxed and not any(t in kind for t in ('text/html','text/plain','application/xhtml+xml')):
+                raise ValueError('当前仅采集 HTML、文本或 PDF 页面。')
+            raw=r.read(MAX_BYTES)  # longer pages are truncated, not rejected
             charset=re.search(r'charset\s*=\s*["\']?([\w-]+)',content_type,re.I)
             if not charset: charset=re.search(br'charset\s*=\s*["\']?([\w-]+)',raw[:4096],re.I)
             encoding=charset.group(1) if charset else 'utf-8'
@@ -157,15 +194,86 @@ def fetch_page(url,base,robots=None):
         finally: c.close()
     raise ValueError('网站重定向次数过多。')
 
+class Robots:
+    """RFC 9309: the group naming our product token (else *), longest matching rule wins, Allow wins
+    ties, * and $ wildcards. urllib.robotparser applies the first match instead, so a leading
+    "Allow: /" silently disabled every later Disallow."""
+    def __init__(self,text=''):
+        groups=[];agents=[];rules=[];self.sitemaps=[]
+        for line in text.splitlines()[:5000]:
+            line=line.split('#',1)[0].strip()
+            if ':' not in line: continue
+            key,value=line.split(':',1);key=key.strip().lower();value=value.strip()
+            if key=='user-agent':
+                if rules: groups.append((agents,rules));agents,rules=[],[]
+                agents.append(value.lower())
+            elif key in ('allow','disallow','crawl-delay') and agents: rules.append((key,value))
+            elif key=='sitemap': self.sitemaps.append(value)
+        if agents: groups.append((agents,rules))
+        token=AGENT.lower()
+        chosen=[r for a,r in groups if token in a] or [r for a,r in groups if '*' in a]
+        self.rules=[];self.delay=None
+        for rules in chosen:
+            for key,value in rules:
+                if key=='crawl-delay':
+                    try: self.delay=float(value)
+                    except ValueError: pass
+                elif value:
+                    pattern=re.escape(unquote(value)).replace(r'\*','.*')
+                    if pattern.endswith(r'\$'): pattern=pattern[:-2]+'$'
+                    self.rules.append((len(value),key=='allow',re.compile(pattern)))
+    def can_fetch(self,url):
+        u=urlsplit(url);path=unquote(u.path or '/')+('?'+unquote(u.query) if u.query else '')
+        if path=='/robots.txt': return True
+        best=None
+        for length,allow,pattern in self.rules:
+            if pattern.match(path) and (best is None or length>best[0] or (length==best[0] and allow)): best=(length,allow)
+        return best is None or best[1]
+    def crawl_delay(self): return self.delay
+
+def load_robots(origin):
+    """2xx: parse; 4xx: no restrictions (RFC 9309 2.3.1.3); 5xx or unreachable: ValueError."""
+    try: _,text,_,_=fetch_page(urljoin(origin,'robots.txt'),origin,relaxed=True)
+    except HttpStatus as error:
+        if 400<=error.status<500: return Robots()
+        raise ValueError('无法读取 robots.txt：'+str(error))
+    except ValueError as error: raise ValueError('无法读取 robots.txt：'+str(error))
+    return Robots(text[:512000])
+
+def archived_page(url):
+    """Latest Internet Archive capture, raw (id_) so links and text are the original page's."""
+    _,text,_,_=fetch_page('https://archive.org/wayback/available?url='+quote(url,safe=''),'https://archive.org/wayback/',relaxed=True)
+    try: snap=json.loads(text)['archived_snapshots']['closest']
+    except (ValueError,KeyError,TypeError): snap=None
+    if not snap or not snap.get('available') or str(snap.get('status'))!='200' or not re.fullmatch(r'\d{14}',str(snap.get('timestamp',''))):
+        raise ValueError('网页存档中没有可用快照。')
+    stamp=snap['timestamp']
+    _,text,raw,ctype=fetch_page('https://web.archive.org/web/'+stamp+'id_/'+url,'https://web.archive.org/web/')
+    return stamp[:4]+'-'+stamp[4:6]+'-'+stamp[6:8],text,raw,ctype
+
+CHALLENGE=re.compile(r'just a moment|attention required|checking your browser|access denied|enable javascript and cookies',re.I)
+SKIP_LINK=re.compile(r'(login|logout|signin|sign-in|signup|register|masuk|daftar|authenticate|/_layouts/|wp-admin|wp-login|/akun|/cart|whatsapp|facebook\.com|twitter\.com|linkedin\.com|/share|print=|\.(zip|rar|jpe?g|png|gif|svg|exe|docx?|xlsx?|pptx?|mp4|mp3)(\?|$))',re.I)
+DETAIL_LINK=re.compile(r'(\.pdf(\?|$)|peraturan/|putusan|perkara|detail|download|unduh|/uu-|nomor|tahun-\d{4}|/\d{4}/\d{2}/|/pages/|pengumuman/|siaran-pers/|berita/)',re.I)
+
+UNJUDGED='AI 未给出可核验的判定（格式无效或引用无法在原文中定位），请查看原文后人工处理。'
+
+def site_root(url):
+    u=urlsplit(url);return urlunsplit((u.scheme,u.netloc,'/','',''))
+
+def link_score(link,anchor,terms):
+    text=(unquote(link)+' '+anchor).lower()
+    return sum(3 for t in terms if t.lower() in text)+(2 if DETAIL_LINK.search(link) else 0)
+
 class PageParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self.text=[];self.title=[];self.links=[];self.skip=0;self.in_title=False;self.date=''
+        self.text=[];self.title=[];self.links=[];self.anchors={};self.anchor=None;self.skip=0;self.in_title=False;self.date=''
     def handle_starttag(self,tag,attrs):
         attrs=dict(attrs)
         if tag in ('script','style','nav','header','footer','noscript','svg'): self.skip+=1
         if tag=='title': self.in_title=True
-        if tag=='a' and attrs.get('href'): self.links.append(attrs['href'])
+        if tag=='a' and attrs.get('href'):
+            self.links.append(attrs['href']);self.anchor=attrs['href'];self.anchors.setdefault(self.anchor,attrs.get('title') or '')
         if tag=='meta' and attrs.get('property',attrs.get('name')) in ('article:published_time','date','pubdate'):
             value=attrs.get('content','')[:10]
             if re.fullmatch(r'\d{4}-\d{2}-\d{2}',value): self.date=value
@@ -173,7 +281,9 @@ class PageParser(HTMLParser):
     def handle_endtag(self,tag):
         if tag in ('script','style','nav','header','footer','noscript','svg'): self.skip=max(0,self.skip-1)
         if tag=='title': self.in_title=False
+        if tag=='a': self.anchor=None
     def handle_data(self,data):
+        if self.anchor is not None and len(self.anchors[self.anchor])<200: self.anchors[self.anchor]+=' '+data.strip()
         if self.in_title: self.title.append(data)
         elif not self.skip: self.text.append(data)
     def result(self):
@@ -230,7 +340,7 @@ def transfer(store,settings,page_ids,kind,analyze=False):
     for page,source in pages:
         imports=json.loads(page['imports_json'])
         for target in (['knowledge','event'] if kind=='both' else [kind]):
-            doc_id,created=insert_document(store,{'title':page['title'],'body':page['body'],'url':page['url'],'source':source['name'],'date':page['date']},target,bool(source['allow_external']),file_path=page['snapshot'],filename='website-snapshot.html')
+            doc_id,created=insert_document(store,{'title':page['title'],'body':page['body'],'url':page['url'],'source':source['name'],'date':page['date']},target,bool(source['allow_external']),file_path=page['snapshot'],filename='website-snapshot'+Path(page['snapshot']).suffix)
             imports[target]=doc_id
             job_id=None
             if analyze and target=='event':
@@ -261,6 +371,22 @@ class Collector:
             else: await asyncio.sleep(2)
     def cancelled(self,run_id):
         return self.store.one('SELECT status FROM web_runs WHERE id=?',(run_id,))['status']=='cancelled'
+    async def review(self,source,batch,usage):
+        """Verdicts by page id. Malformed items and quotes that cannot be found in the page are dropped
+        (never trusted); model/service errors still fail the run."""
+        # Bounded original text windows preserve quotes. No model-generated URLs are accepted.
+        snippets={p['id']:p['body'][:6000] for p in batch}
+        result,used=await model.call_model(self.settings,{'keywords':source['keywords'],'pages':[{'id':p['id'],'title':p['title'],'body':snippets[p['id']]} for p in batch]},system=SEARCH_SYSTEM)
+        usage.append(used)
+        items=result.get('items') if isinstance(result,dict) else None
+        verdicts={}
+        for item in items if isinstance(items,list) else []:
+            if not isinstance(item,dict) or type(item.get('id')) is not int or item['id'] not in snippets or item['id'] in verdicts or type(item.get('relevant')) is not bool: continue
+            reason=item.get('reason');quote=item.get('quote')
+            if not isinstance(reason,str) or not reason.strip() or len(reason)>2000 or not isinstance(quote,str) or len(quote)>6000: continue
+            if item['relevant'] and (len(quote)<6 or quote not in snippets[item['id']]): continue
+            verdicts[item['id']]=(item['relevant'],reason,quote)
+        return verdicts
     async def process(self,run):
         store=self.store;source=json.loads(run['config_json']);run_id=run['id']
         with store.db() as db:
@@ -268,48 +394,64 @@ class Collector:
         try:
             if not self.settings.configured: raise ValueError('AI检索需要先配置模型服务。')
             if not source['allow_external']: raise ValueError('请授权将该网站的网页内容发送给外部AI服务。')
-            base=source['url'];u=urlsplit(base);origin=urlunsplit((u.scheme,u.netloc,'/','',''))
-            robots=RobotFileParser()
-            try:
-                _,text,_,_=await asyncio.to_thread(fetch_page,urljoin(origin,'robots.txt'),origin)
-                robots.parse(text.splitlines())
+            base=source['url'];live=True;live_error=''
+            try: robots=await asyncio.to_thread(load_robots,site_root(base))
             except ValueError as error:
-                if 'HTTP 404' in str(error): robots.parse([])
-                else: raise ValueError('无法确认 robots.txt 采集许可：'+str(error))
-            pending=[base];seen=set();pages=[]
+                if not ARCHIVE_FALLBACK: raise
+                # Unreachable from this server: read Internet Archive copies instead (it applies its own exclusions).
+                robots=Robots();live=False;live_error=str(error)
+            pending=[base];seen=set();pages=[];scores={};rebased=0;unjudged=0
+            terms=[t for t in re.split(r'[,，;；\s]+',source['keywords']) if t]
             while pending and len(seen)<source['max_pages']:
                 if self.cancelled(run_id): return
                 url=pending.pop(0)
                 if url in seen:continue
                 seen.add(url)
                 try:
-                    if not robots.can_fetch(AGENT,url): raise ValueError('robots.txt 不允许采集此页。')
-                    final,text,raw,ctype=await asyncio.to_thread(fetch_page,url,base,robots)
-                    if not robots.can_fetch(AGENT,final): raise ValueError('robots.txt 不允许采集跳转后的页面。')
-                    parser=PageParser();parser.feed(text)
-                    title,body=parser.result() if 'html' in ctype.lower() else (final,text)
+                    if not robots.can_fetch(url): raise ValueError('robots.txt 不允许采集此页。')
+                    archived=''
+                    try:
+                        if not live: raise ValueError(live_error)
+                        final,text,raw,ctype=await asyncio.to_thread(fetch_page,url,base,robots)
+                        if 'html' in ctype.lower() and len(text)<40000 and CHALLENGE.search(text[:3000]): raise ValueError('网站启用了人机验证。')
+                    except OutOfScope as moved:
+                        # The entry itself moved (new column path, http→https, new host): adopt it as the scope.
+                        if url!=base or rebased>=2: raise
+                        rebased+=1;moved_root=site_root(moved.target)!=site_root(base);base=moved.target
+                        if moved_root: robots=await asyncio.to_thread(load_robots,site_root(base))
+                        pending.insert(0,base);continue
+                    except ValueError as error:
+                        if not ARCHIVE_FALLBACK or 'robots.txt' in str(error) or (isinstance(error,HttpStatus) and error.status in (404,410)): raise
+                        try: archived,text,raw,ctype=await asyncio.to_thread(archived_page,url)
+                        except ValueError as inner: raise ValueError(str(error)+'；网页存档：'+str(inner))
+                        final=url
+                    if not robots.can_fetch(final): raise ValueError('robots.txt 不允许采集跳转后的页面。')
+                    parser=PageParser()
+                    if 'html' in ctype.lower(): parser.feed(text);title,body=parser.result()
+                    else: title,body=unquote(Path(urlsplit(final).path).name) or final,text
                     if len(body.strip())<20: raise ValueError('页面无足够可提取正文，可能需要登录或动态渲染。')
-                    if len(body)>60000: raise ValueError('网页正文超过60000字符，请缩小采集范围。')
+                    if archived and CHALLENGE.search(title+' '+body[:500]): raise ValueError('网页存档中保存的也是人机验证页面。')
+                    if len(body)>MAX_BODY: body=body[:MAX_BODY-len(TRUNCATED)]+TRUNCATED
+                    title=(('［网页存档 '+archived+'］') if archived else '')+(title or final)
                     digest=hashlib.sha256(body.encode()).hexdigest()
                     if any(p['digest']==digest for p in pages): continue
                     # Snapshot is immutable and downloaded only as an attachment, never executed.
-                    snapshot='web-'+str(run_id)+'-'+hashlib.sha256(final.encode()).hexdigest()[:12]+'-'+hashlib.sha256(raw).hexdigest()[:16]+'.html'
+                    snapshot='web-'+str(run_id)+'-'+hashlib.sha256(final.encode()).hexdigest()[:12]+'-'+hashlib.sha256(raw).hexdigest()[:16]+('.pdf' if ctype=='application/pdf' else '.html')
                     (store.directory/'uploads'/snapshot).write_bytes(raw)
                     with store.db() as db:
-                        page_id=db.execute('INSERT INTO web_pages(run_id,url,title,body,date,fetched_at,digest,snapshot) VALUES (?,?,?,?,?,?,?,?)',(run_id,final,title or final,body,parser.date,now(),digest,snapshot)).lastrowid
-                    pages.append({'id':page_id,'title':title or final,'body':body,'url':final,'digest':digest})
-                    links=[]
+                        page_id=db.execute('INSERT INTO web_pages(run_id,url,title,body,date,fetched_at,digest,snapshot) VALUES (?,?,?,?,?,?,?,?)',(run_id,final,title[:230],body,parser.date,now(),digest,snapshot)).lastrowid
+                    pages.append({'id':page_id,'title':title[:230],'body':body,'url':final,'digest':digest})
                     for href in parser.links:
                         try: link=clean_url(urljoin(final,href))
                         except ValueError:continue
-                        if in_scope(link,base) and link not in seen and link not in pending and not re.search(r'\.(pdf|zip|jpg|png|exe|docx|xlsx)(\?|$)',link,re.I): links.append(link)
-                    terms=[t for t in re.split(r'[,，;；\s]+',source['keywords']) if t]
-                    links.sort(key=lambda link:-sum(t.lower() in link.lower() for t in terms))
-                    pending.extend(links[:100-len(pending)])
+                        if in_scope(link,base) and link not in seen and link not in scores and not SKIP_LINK.search(link):
+                            scores[link]=link_score(link,parser.anchors.get(href,''),terms);pending.append(link)
+                    # Most promising links first (keywords in URL or anchor text, detail/PDF pages); ties keep discovery order.
+                    pending.sort(key=lambda link:-scores.get(link,0));del pending[100:]
                 except ValueError as error:
                     with store.db() as db: db.execute('INSERT INTO web_fetch_errors(run_id,url,error) VALUES (?,?,?)',(run_id,url,str(error)))
                 with store.db() as db: db.execute('UPDATE web_runs SET progress=? WHERE id=?',(len(seen),run_id))
-                delay=max(1,robots.crawl_delay(AGENT) or robots.crawl_delay('*') or 1)
+                delay=max(1,robots.crawl_delay() or 1)
                 if delay>30: raise ValueError('网站要求较长采集间隔，请联系站点管理员后调整采集方式。')
                 await asyncio.sleep(delay)
             if not pages: raise ValueError('未采集到可检索正文，请查看逐页失败原因或更换入口。')
@@ -317,20 +459,19 @@ class Collector:
             for start in range(0,len(pages),4):
                 if self.cancelled(run_id):return
                 batch=pages[start:start+4]
-                # Bounded original text windows preserve quotes. No model-generated URLs are accepted.
-                snippets={p['id']:p['body'][:6000] for p in batch}
-                result,used=await model.call_model(self.settings,{'keywords':source['keywords'],'pages':[{'id':p['id'],'title':p['title'],'body':snippets[p['id']]} for p in batch]},system=SEARCH_SYSTEM)
-                items=result.get('items') if isinstance(result,dict) else None
-                if not isinstance(items,list) or len(items)!=len(batch): raise ValueError('AI检索结果格式无效。')
-                ids=set()
-                for item in items:
-                    if not isinstance(item,dict) or type(item.get('id')) is not int or item['id'] not in snippets or item['id'] in ids or type(item.get('relevant')) is not bool: raise ValueError('AI检索返回了无效或重复的页面编号。')
-                    reason=item.get('reason');quote=item.get('quote')
-                    if not isinstance(reason,str) or not reason.strip() or len(reason)>2000 or not isinstance(quote,str) or len(quote)>6000: raise ValueError('AI检索缺少有效说明。')
-                    if item['relevant'] and (len(quote)<6 or quote not in snippets[item['id']]): raise ValueError('AI相关性引用不能在原始网页中定位，结果未采纳。')
-                    ids.add(item['id'])
-                    with store.db() as db: db.execute('UPDATE web_pages SET relevant=?,reason=?,quote=? WHERE id=?',(int(item['relevant']),reason,quote,item['id']))
-                usage.append(used)
+                verdicts=await self.review(source,batch,usage)
+                # One retry page by page for anything the batch answer left out or got wrong.
+                for page in batch:
+                    if page['id'] not in verdicts: verdicts.update(await self.review(source,[page],usage))
+                for page in batch:
+                    verdict=verdicts.get(page['id'])
+                    with store.db() as db:
+                        if verdict: db.execute('UPDATE web_pages SET relevant=?,reason=?,quote=? WHERE id=?',(int(verdict[0]),verdict[1],verdict[2],page['id']))
+                        else:
+                            unjudged+=1
+                            db.execute('UPDATE web_pages SET reason=? WHERE id=?',(UNJUDGED,page['id']))
+            if unjudged:
+                with store.db() as db: db.execute('UPDATE web_runs SET error=? WHERE id=?',(f'{unjudged} 个页面 AI 未给出可核验的判定，未参与自动入库，可查看原文后人工处理。',run_id))
             if self.cancelled(run_id):return
             with store.db() as db: db.execute("UPDATE web_runs SET status='completed',finished_at=?,model=?,usage_json=? WHERE id=? AND status='running'",(now(),self.settings.model_name,json.dumps(usage),run_id))
             if source['auto_import']!='none':

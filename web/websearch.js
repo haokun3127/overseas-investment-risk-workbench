@@ -21,6 +21,8 @@ async function showWebRun(id){
     $('#cancel-web-run')?.addEventListener('click',async()=>{try{await api('/web/runs/'+id+'/cancel',{method:'POST'});await showWebRun(id);}catch(e){toast(e.message);}});
     $$('[data-web-original]').forEach(b=>b.onclick=async()=>{try{const p=await api('/web/pages/'+b.dataset.webOriginal);$('#source-content').innerHTML=`<h2>${esc(p.title)}</h2><p>${esc(p.url)} · 抓取 ${when(p.fetched_at)}</p><div class="source-body">${esc(p.body)}</div>`;$('#source-dialog').showModal();}catch(e){toast(e.message);}});
     $$('[data-source]',target).forEach(b=>b.onclick=()=>showSource(b.dataset.source));
+    const importKind=$('#web-import-form [name=kind]'),importAnalyze=$('#web-import-form [name=analyze]');
+    if(importKind&&importAnalyze){const sync=()=>{importAnalyze.disabled=importKind.value==='knowledge';if(importAnalyze.disabled)importAnalyze.checked=false;};importKind.onchange=sync;sync();}
     $$('[name=web-page]',target).forEach(c=>c.onchange=()=>{const n=$$('[name=web-page]:checked',target).length;const b=$('#web-import-button');if(b){b.disabled=!n;b.textContent=n?`保存 ${n} 个页面`:'选择相关页面后入库';}});
     $('#web-import-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget),b=$('#web-import-button');b.disabled=true;try{const result=await api('/web/import',{method:'POST',body:{page_ids:$$('[name=web-page]:checked',target).map(c=>Number(c.value)),kind:f.get('kind'),analyze:f.has('analyze')}});toast(`已保存 ${result.items.filter(i=>i.created).length} 条资料，重复内容不会新增${result.items.some(i=>i.job_id)?'；风险分析已排队':''}`);await showWebRun(id);}catch(error){$('#web-import-feedback').innerHTML=errorBox(error.message);b.disabled=false;}});
     if(active)webPoll=setTimeout(()=>showWebRun(id),3000);
@@ -37,7 +39,7 @@ function bindWebsite(){
   form.onsubmit=async e=>{e.preventDefault();const f=new FormData(form),id=f.get('source_id'),b=$('[type=submit]',form);b.disabled=true;try{await api('/web/sources'+(id?'/'+id:''),{method:id?'PUT':'POST',body:{name:f.get('name'),url:f.get('url'),keywords:f.get('keywords'),max_pages:Number(f.get('max_pages')),interval_hours:Number(f.get('interval_hours')),auto_import:f.get('auto_import'),auto_analyze:f.has('auto_analyze'),allow_external:f.has('allow_external')}});toast('网站配置已保存');webEditorOpen=false;await render();}catch(error){$('#web-source-feedback').innerHTML=errorBox(error.message);b.disabled=false;}};
   $$('[data-web-run]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{const r=await api('/web/runs',{method:'POST',body:{source_id:Number(b.dataset.webRun)}});webSelectedRun=r.id;await render();}catch(error){toast(error.message);b.disabled=false;}});
   $$('[data-web-pause]').forEach(b=>b.onclick=async()=>{try{await api('/web/sources/'+b.dataset.webPause+'/pause',{method:'POST'});toast('定时检索已暂停，当前任务如需停止请点击取消');await render();}catch(error){toast(error.message);}});
-  $$('[data-web-detail]').forEach(b=>b.onclick=()=>showWebRun(Number(b.dataset.webDetail)));
+  $$('[data-web-detail]').forEach(b=>b.onclick=async()=>{await showWebRun(Number(b.dataset.webDetail));$('#web-results')?.scrollIntoView({block:'start',behavior:'smooth'});});
   $('#refresh-web-runs').onclick=render;
   if(webSelectedRun)showWebRun(webSelectedRun);
 }

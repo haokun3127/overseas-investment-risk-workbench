@@ -9,6 +9,10 @@ from app import websearch
 
 HEADERS={'X-Requested-With':'risk-workbench'}
 
+@pytest.fixture(autouse=True)
+def no_archive(monkeypatch):
+    monkeypatch.setattr(websearch,'ARCHIVE_FALLBACK',False)
+
 @pytest.fixture
 def web_client(tmp_path):
     settings=Settings(data_dir=tmp_path,model_base_url='https://model.example/v1',model_name='test-model',model_api_key='test',model_mode='external')
@@ -24,7 +28,7 @@ def add_source(c,**extra):
     assert r.status_code==200,r.text
     return r.json()['id']
 
-def fake_fetch(url,base,robots=None):
+def fake_fetch(url,base,robots=None,relaxed=False):
     if url.endswith('robots.txt'):
         return url,'User-agent: *\nDisallow: /private/\n',b'','text/plain'
     if url.endswith('/news/'):
@@ -73,13 +77,15 @@ def test_search_failure_does_not_auto_import(web_client,monkeypatch):
         return {'items':[{'id':p['id'],'relevant':True,'reason':'假引用','quote':'这是不存在于任何页面的伪造原文'} for p in payload['pages']]},{}
     monkeypatch.setattr(websearch.model,'call_model',wrong)
     run=process(web_client,add_source(web_client,auto_import='both',auto_analyze=True))
-    assert run['status']=='failed' and '不能在原始网页中定位' in run['error']
+    # Fabricated quotes are never accepted: pages stay unjudged, the run still completes, nothing is imported.
+    assert run['status']=='completed' and 'AI 未给出可核验的判定' in run['error']
+    assert run['items'] and all(p['relevant'] is None and p['reason']==websearch.UNJUDGED for p in run['items'])
     assert not web_client.get('/api/documents').json()['items']
     assert not web_client.get('/api/documents?kind=knowledge').json()['items']
 
 def test_robots_and_scope_stop_fetching(web_client,monkeypatch):
     calls=[]
-    def blocked(url,base,robots=None):
+    def blocked(url,base,robots=None,relaxed=False):
         calls.append(url)
         return url,'User-agent: *\nDisallow: /news/\n',b'','text/plain'
     monkeypatch.setattr(websearch,'fetch_page',blocked)
@@ -140,9 +146,8 @@ def test_redirect_and_size_limits(monkeypatch):
     assert connected==[('source.example','8.8.8.8',True)]
     Response.status=200
     Response.getheader=lambda self,name,default=None: 'text/html' if name=='Content-Type' else default
-    Response.read=lambda self,size:b'x'*(websearch.MAX_BYTES+1)
-    with pytest.raises(ValueError,match='1MB'):
-        websearch.fetch_page('https://source.example/news/','https://source.example/news/')
+    Response.read=lambda self,size:b'x'*min(size,websearch.MAX_BYTES+1)
+    assert len(websearch.fetch_page('https://source.example/news/','https://source.example/news/')[2])==websearch.MAX_BYTES
 
 def test_scheduler_runs_due_source_and_recovers_interrupted_run(web_client,monkeypatch):
     c=web_client;sid=add_source(c,interval_hours=24)
@@ -161,7 +166,7 @@ def test_scheduler_runs_due_source_and_recovers_interrupted_run(web_client,monke
 
 def test_snapshots_do_not_overwrite_when_redirected_page_changes(web_client,monkeypatch):
     raws=[]
-    def changing(url,base,robots=None):
+    def changing(url,base,robots=None,relaxed=False):
         if url.endswith('robots.txt'):return fake_fetch(url,base,robots)
         html='<title>原料供应通报</title><p>港口设备故障导致生产原料供应中断，库存只够三天。这是第'+str(len(raws)+1)+'版。</p><a href="/news/alias">其他入口</a>'
         raws.append(html.encode())
@@ -222,3 +227,86 @@ def test_fallback_proxy_keeps_private_address_block(monkeypatch):
     monkeypatch.setattr(socket,'getaddrinfo',nxdomain)
     websearch.fetch_page(url,url)
     assert calls==[(None,('127.0.0.1',7890))]
+
+def test_robots_follow_rfc9309_longest_match():
+    text="User-agent: GPTBot\nDisallow: /\n\nUser-agent: *\nAllow: /\nDisallow: /cari\nDisallow: /peraturan/*/gated\nDisallow: /*.json$\nCrawl-delay: 2\n"
+    r=websearch.Robots(text)
+    assert r.can_fetch('https://pasal.id/peraturan/uu/uu-no-13-tahun-2003')
+    assert not r.can_fetch('https://pasal.id/cari?q=upah')
+    assert not r.can_fetch('https://pasal.id/peraturan/uu/gated')
+    assert not r.can_fetch('https://pasal.id/data/a.json') and r.can_fetch('https://pasal.id/data/a.json?x=1')
+    assert r.crawl_delay()==2
+    mine=websearch.Robots("User-agent: *\nDisallow: /\n\nUser-agent: RiskWorkbenchBot\nDisallow: /private/\n")
+    assert mine.can_fetch('https://x.example/news/') and not mine.can_fetch('https://x.example/private/a')
+    assert websearch.Robots("User-agent: *\nDisallow: /news\nAllow: /news/open\n").can_fetch('https://x.example/news/open/1')
+
+def test_robots_4xx_is_unrestricted_but_5xx_stops(monkeypatch):
+    def status(code):
+        def fetch(url,base,robots=None,relaxed=False):raise websearch.HttpStatus(code)
+        return fetch
+    monkeypatch.setattr(websearch,'fetch_page',status(403))
+    assert websearch.load_robots('https://x.example/').can_fetch('https://x.example/anything')
+    monkeypatch.setattr(websearch,'fetch_page',status(503))
+    with pytest.raises(ValueError,match='robots.txt'):websearch.load_robots('https://x.example/')
+
+def test_long_pages_are_truncated_and_entry_redirect_becomes_scope(web_client,monkeypatch):
+    calls=[]
+    def moved(url,base,robots=None,relaxed=False):
+        calls.append((url,base))
+        if url.endswith('robots.txt'):return url,'User-agent: *\nDisallow: /private/\n',b'','text/plain'
+        if url=='https://source.example/news/':raise websearch.OutOfScope('https://source.example/id/berita/')
+        html='<title>原料供应通报</title><p>港口设备故障导致原料延迟。'+'详细内容'*20000+'</p>'
+        return url,html,html.encode(),'text/html'
+    monkeypatch.setattr(websearch,'fetch_page',moved);monkeypatch.setattr(websearch.model,'call_model',fake_model)
+    run=process(web_client,add_source(web_client,max_pages=2))
+    assert run['status']=='completed' and len(run['items'])==1
+    assert ('https://source.example/id/berita/','https://source.example/id/berita/') in calls
+    body=web_client.get('/api/web/pages/'+str(run['items'][0]['id'])).json()['body']
+    assert len(body)==websearch.MAX_BODY and body.endswith(websearch.TRUNCATED)
+    result=web_client.post('/api/web/import',json={'page_ids':[run['items'][0]['id']],'kind':'knowledge'})
+    assert result.status_code==200,result.text
+
+def test_unreachable_page_falls_back_to_internet_archive(web_client,monkeypatch):
+    monkeypatch.setattr(websearch,'ARCHIVE_FALLBACK',True)
+    def blocked(url,base,robots=None,relaxed=False):
+        if url.endswith('robots.txt'):raise websearch.HttpStatus(403)
+        raise websearch.HttpStatus(403)
+    def archive(url):
+        html='<title>原料供应通报</title><p>港口设备故障导致原料延迟七天，库存仅能维持三天。</p>'
+        return '2026-05-01',html,html.encode(),'text/html'
+    monkeypatch.setattr(websearch,'fetch_page',blocked);monkeypatch.setattr(websearch,'archived_page',archive)
+    monkeypatch.setattr(websearch.model,'call_model',fake_model)
+    run=process(web_client,add_source(web_client,max_pages=1))
+    assert run['status']=='completed' and run['items'][0]['title'].startswith('［网页存档 2026-05-01］')
+    def challenge(url):
+        html='<title>Just a moment...</title><p>Checking your browser before accessing the site, please wait.</p>'
+        return '2026-05-01',html,html.encode(),'text/html'
+    monkeypatch.setattr(websearch,'archived_page',challenge)
+    run=process(web_client,add_source(web_client,max_pages=1))
+    assert run['status']=='failed' and '人机验证' in run['errors'][0]['error']
+
+def test_pdf_pages_are_extracted(monkeypatch):
+    from pypdf import PdfWriter
+    import io
+    writer=PdfWriter();writer.add_blank_page(200,200);buf=io.BytesIO();writer.write(buf)
+    with pytest.raises(ValueError,match='扫描件'):websearch.pdf_text(buf.getvalue())
+    monkeypatch.setattr(websearch,'public_address',lambda host,port:'8.8.8.8')
+    monkeypatch.setattr(websearch,'pdf_text',lambda raw:'[第1页]\nPeraturan tentang tenaga kerja asing')
+    class Response:
+        status=200
+        def getheader(self,name,default=None):return 'application/pdf' if name=='Content-Type' else default
+        def read(self,size):return b'%PDF-1.4'
+    class Connection:
+        def __init__(self,*a,**kw):pass
+        def request(self,*a,**kw):pass
+        def getresponse(self):return Response()
+        def close(self):pass
+    monkeypatch.setattr(websearch,'PinnedConnection',Connection)
+    url,text,raw,ctype=websearch.fetch_page('https://source.example/news/a.pdf','https://source.example/news/')
+    assert ctype=='application/pdf' and 'tenaga kerja' in text
+
+def test_link_ranking_prefers_detail_pages_and_skips_login():
+    terms=['upah','pengupahan']
+    assert websearch.SKIP_LINK.search('https://ojk.go.id/_layouts/15/Authenticate.aspx?Source=x')
+    assert websearch.SKIP_LINK.search('https://x.go.id/masuk')
+    assert websearch.link_score('https://x.go.id/peraturan/pp-36-2021.pdf','PP Pengupahan',terms)>websearch.link_score('https://x.go.id/kontak','Kontak',terms)
