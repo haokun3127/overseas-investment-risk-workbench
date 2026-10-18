@@ -14,7 +14,7 @@ import time
 import zlib
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
+from urllib.parse import quote, unquote, urlencode, urljoin, urlsplit, urlunsplit
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
@@ -179,7 +179,7 @@ def pdf_text(raw):
     if len(re.sub(r'\[第\d+页\]|\s','',body))<20: raise ValueError('PDF 没有可提取的文字，可能是扫描件。')
     return body
 
-def fetch_page(url,base,robots=None,relaxed=False):
+def fetch_page(url,base,robots=None,relaxed=False,limit=MAX_BYTES):
     """No implicit redirects; every hop resolves and connects to a validated IP (optionally tunnelled
     through the loopback fallback proxy). relaxed: robots.txt / API reads that may redirect across hosts
     and return any text type."""
@@ -205,7 +205,7 @@ def fetch_page(url,base,robots=None,relaxed=False):
                 return url,pdf_text(raw),raw,'application/pdf'
             if not relaxed and not any(t in kind for t in ('text/html','text/plain','application/xhtml+xml')):
                 raise ValueError('当前仅采集 HTML、文本或 PDF 页面。')
-            raw=read_body(r,MAX_BYTES)  # longer pages are truncated, not rejected
+            raw=read_body(r,limit)  # longer pages are truncated, not rejected
             charset=re.search(r'charset\s*=\s*["\']?([\w-]+)',content_type,re.I)
             if not charset: charset=re.search(br'charset\s*=\s*["\']?([\w-]+)',raw[:4096],re.I)
             encoding=charset.group(1) if charset else 'utf-8'
@@ -264,15 +264,23 @@ def load_robots(origin):
     except ValueError as error: raise ValueError('无法读取 robots.txt：'+str(error))
     return Robots(text[:512000])
 
+def archive_get(url,base,relaxed=False):
+    """archive.org through the proxy drops connections now and then: retry once after a short pause."""
+    for attempt in range(2):
+        try: return fetch_page(url,base,relaxed=relaxed)
+        except ValueError as error:
+            if attempt or '网页连接失败' not in str(error): raise
+            time.sleep(2)
+
 def archived_page(url):
     """Latest Internet Archive capture, raw (id_) so links and text are the original page's."""
-    _,text,_,_=fetch_page('https://archive.org/wayback/available?url='+quote(url,safe=''),'https://archive.org/wayback/',relaxed=True)
+    _,text,_,_=archive_get('https://archive.org/wayback/available?url='+quote(url,safe=''),'https://archive.org/wayback/',relaxed=True)
     try: snap=json.loads(text)['archived_snapshots']['closest']
     except (ValueError,KeyError,TypeError): snap=None
     if not snap or not snap.get('available') or str(snap.get('status'))!='200' or not re.fullmatch(r'\d{14}',str(snap.get('timestamp',''))):
         raise ValueError('网页存档中没有可用快照。')
     stamp=snap['timestamp']
-    _,text,raw,ctype=fetch_page('https://web.archive.org/web/'+stamp+'id_/'+url,'https://web.archive.org/web/')
+    _,text,raw,ctype=archive_get('https://web.archive.org/web/'+stamp+'id_/'+url,'https://web.archive.org/web/')
     return stamp[:4]+'-'+stamp[4:6]+'-'+stamp[6:8],text,raw,ctype
 
 CHALLENGE=re.compile(r'just a moment|attention required|checking your browser|access denied|enable javascript and cookies',re.I)
@@ -312,6 +320,105 @@ class PageParser(HTMLParser):
         elif not self.skip: self.text.append(data)
     def result(self):
         return (' '.join(''.join(self.title).split())[:300], '\n'.join(line.strip() for line in ''.join(self.text).splitlines() if line.strip()))
+
+# Free official APIs used instead of crawling sites that block crawlers or hide content behind scripts.
+# Each connector returns (url, title, body, date, raw, content_type) tuples and honours the API host's robots.txt.
+GENERIC_TERMS={'sanction','sanctions','export','exports','control','controls','entity','entities','list','lists','regulation',
+               'regulations','law','laws','rule','rules','notice','notices','federal','register','cfr','ear','legal','library'}
+
+def english_terms(keywords):
+    terms=[t for t in re.split(r'[,，;；\s]+',keywords) if re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.\-]*',t)]
+    if re.search(r'印尼|印度尼西亚',keywords) and 'indonesia' not in (t.lower() for t in terms): terms.append('Indonesia')
+    return terms
+
+def api_get(url,robots,limit=MAX_BYTES):
+    if not robots.can_fetch(url): raise Disallowed('robots.txt 不允许调用该接口：'+url)
+    return fetch_page(url,url,relaxed=True,limit=limit)
+
+def html_text(value):
+    parser=PageParser();parser.feed(value or '');return parser.result()[1]
+
+FR_FIELDS=('title','type','html_url','raw_text_url','publication_date','abstract','document_number')
+
+def federal_register(base,keywords,max_pages):
+    """federalregister.gov API (no key): keyword search, or the single document a /documents/ URL names."""
+    api='https://www.federalregister.gov/api/v1/'
+    robots=load_robots('https://www.federalregister.gov/')
+    fields=[('fields[]',f) for f in FR_FIELDS]
+    number=re.search(r'/documents/\d{4}/\d{2}/\d{2}/([\w-]+)',urlsplit(base).path)
+    if number:
+        _,text,_,_=api_get(api+'documents/'+number.group(1)+'.json?'+urlencode(fields),robots);results=[json.loads(text)]
+    else:
+        terms=english_terms(keywords)
+        if not terms: raise ValueError('联邦公报接口需要英文关键词，例如 Indonesia、export control。')
+        query=[('conditions[term]',' '.join(terms)),('per_page',str(min(max_pages,20))),('order','relevance')]+fields
+        _,text,_,_=api_get(api+'documents.json?'+urlencode(query),robots);results=json.loads(text).get('results') or []
+    items=[]
+    for doc in results[:max_pages]:
+        body=doc.get('abstract') or '';raw=json.dumps(doc,ensure_ascii=False).encode();ctype='application/json'
+        if doc.get('raw_text_url'):
+            try:
+                _,full,raw,_=api_get(doc['raw_text_url'],robots);body=html_text(full) or body;ctype='text/plain'
+            except ValueError: pass
+        title=(doc.get('type') or '联邦公报')+'：'+(doc.get('title') or doc.get('document_number') or '')
+        items.append((doc.get('html_url') or base,title,body,doc.get('publication_date') or '',raw,ctype))
+    if not items: raise ValueError('联邦公报接口没有找到匹配的文件，请调整英文关键词。')
+    return items
+
+def ecfr(base,keywords,max_pages):
+    """eCFR search API (no key). robots.txt forbids the full-text renderer, so results are section
+    headings plus the official search excerpt, linked to the section on ecfr.gov."""
+    robots=load_robots('https://www.ecfr.gov/')
+    path=urlsplit(base).path;query=[]
+    for level in ('title','part','section'):
+        m=re.search(level+r'-([0-9A-Za-z.]+)',path)
+        if m: query.append(('hierarchy['+level+']',m.group(1)))
+    terms=english_terms(keywords)
+    if not terms: raise ValueError('eCFR 接口需要英文关键词，例如 entity list、Indonesia。')
+    query=[('query',' '.join(terms)),('per_page',str(min(max_pages,20)))]+query
+    _,text,raw,_=api_get('https://www.ecfr.gov/api/search/v1/results?'+urlencode(query),robots)
+    items=[]
+    for hit in json.loads(text).get('results') or []:
+        h=hit.get('hierarchy') or {};heads=hit.get('hierarchy_headings') or {};names=hit.get('headings') or {}
+        link='https://www.ecfr.gov/current/title-'+str(h.get('title'))+('/section-'+h['section'] if h.get('section') else '/part-'+str(h.get('part')))
+        path=' > '.join(x.strip() for x in (heads.get('title'),heads.get('chapter'),heads.get('part'),heads.get('subpart'),heads.get('section')) if x)
+        body=path+'\n'+(names.get('section') or names.get('part') or '')+'\n'+html_text(hit.get('full_text_excerpt'))
+        items.append((link,'eCFR '+(heads.get('section') or heads.get('part') or '')+' '+(names.get('section') or names.get('part') or ''),body,hit.get('starts_on') or '',json.dumps(hit,ensure_ascii=False).encode(),'application/json'))
+    if not items: raise ValueError('eCFR 接口没有找到匹配的条款，请调整英文关键词。')
+    return items[:max_pages]
+
+SDN_URL='https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/'
+
+def ofac_sdn(base,keywords,max_pages):
+    """OFAC SDN list (official CSV export, no key): entries whose name, programme, remarks or address match
+    the specific keywords (generic words like 'sanctions' are ignored; default Indonesia)."""
+    import csv
+    robots=load_robots('https://sanctionslistservice.ofac.treas.gov/')
+    terms=[t.lower() for t in english_terms(keywords) if t.lower() not in GENERIC_TERMS] or ['indonesia']
+    _,sdn,raw,_=api_get(SDN_URL+'SDN.CSV',robots,limit=20*1024*1024)
+    try: _,add,_,_=api_get(SDN_URL+'ADD.CSV',robots,limit=20*1024*1024)
+    except ValueError: add=''
+    located={row[0] for row in csv.reader(io.StringIO(add)) if len(row)>4 and any(t in ' '.join(row[1:]).lower() for t in terms)}
+    clean=lambda v:'' if v.strip()=='-0-' else v.strip()
+    hits=[]
+    for row in csv.reader(io.StringIO(sdn)):
+        if len(row)<12: continue
+        text=' '.join(row[1:]).lower()
+        if row[0] in located or any(t in text for t in terms):
+            hits.append(' | '.join(x for x in (clean(row[1]),clean(row[2]) or 'entity','项目 '+clean(row[3]),clean(row[11])) if x))
+    if not hits: raise ValueError('OFAC SDN 名单中没有与关键词（'+'、'.join(terms)+'）匹配的条目。')
+    items=[];size=40
+    for i in range(0,min(len(hits),size*max_pages),size):
+        body='OFAC SDN 名单中与“'+'、'.join(terms)+'”匹配的条目（共 '+str(len(hits))+' 条，本页第 '+str(i+1)+'–'+str(min(i+size,len(hits)))+' 条）：\n'+'\n'.join(hits[i:i+size])
+        items.append(('https://sanctionslist.ofac.treas.gov/Home/SdnList','OFAC SDN 名单匹配：'+'、'.join(terms)+'（'+str(i//size+1)+'）',body,'',raw if i==0 else body.encode(),'text/csv'))
+    return items
+
+def api_connector(url):
+    u=urlsplit(url);host=(u.hostname or '').removeprefix('www.')
+    if host=='federalregister.gov': return federal_register
+    if host=='ecfr.gov': return ecfr
+    if host in ('sanctionslist.ofac.treas.gov','sanctionssearch.ofac.treas.gov') or re.search(r'specially-designated-nationals|consolidated-sanctions-list|sdn-list',u.path,re.I): return ofac_sdn
+    return None
 
 class SourceInput(BaseModel):
     name: str = Field(min_length=1,max_length=100)
@@ -411,6 +518,19 @@ class Collector:
             if item['relevant'] and (len(quote)<6 or quote not in snippets[item['id']]): continue
             verdicts[item['id']]=(item['relevant'],reason,quote)
         return verdicts
+    def keep(self,run_id,pages,url,title,body,date,raw,ctype):
+        """Store one page (immutable snapshot + text). False when its text duplicates a page already kept."""
+        if len(body)>MAX_BODY: body=body[:MAX_BODY-len(TRUNCATED)]+TRUNCATED
+        digest=hashlib.sha256(body.encode()).hexdigest()
+        if any(p['digest']==digest for p in pages): return False
+        # Snapshot is immutable and downloaded only as an attachment, never executed.
+        ext={'application/pdf':'.pdf','application/json':'.json','text/csv':'.csv','text/plain':'.txt'}.get(ctype,'.html')
+        snapshot='web-'+str(run_id)+'-'+hashlib.sha256(url.encode()).hexdigest()[:12]+'-'+hashlib.sha256(raw).hexdigest()[:16]+ext
+        (self.store.directory/'uploads'/snapshot).write_bytes(raw)
+        with self.store.db() as db:
+            page_id=db.execute('INSERT INTO web_pages(run_id,url,title,body,date,fetched_at,digest,snapshot) VALUES (?,?,?,?,?,?,?,?)',(run_id,url,title[:230],body,date[:40],now(),digest,snapshot)).lastrowid
+        pages.append({'id':page_id,'title':title[:230],'body':body,'url':url,'digest':digest})
+        return True
     async def process(self,run):
         store=self.store;source=json.loads(run['config_json']);run_id=run['id']
         with store.db() as db:
@@ -418,13 +538,21 @@ class Collector:
         try:
             if not self.settings.configured: raise ValueError('AI检索需要先配置模型服务。')
             if not source['allow_external']: raise ValueError('请授权将该网站的网页内容发送给外部AI服务。')
-            base=source['url'];live=True;live_error=''
-            try: robots=await asyncio.to_thread(load_robots,site_root(base))
-            except ValueError as error:
-                if not ARCHIVE_FALLBACK: raise
-                # Unreachable from this server: read Internet Archive copies instead (it applies its own exclusions).
-                robots=Robots();live=False;live_error=str(error)
-            pending=[base];seen=set();pages=[];scores={};rebased=0;unjudged=0
+            base=source['url'];live=True;live_error='';pages=[];unjudged=0
+            connector=api_connector(base)
+            if connector:
+                # Official API instead of crawling (see api_connector); the review below is the same.
+                for item in await asyncio.to_thread(connector,base,source['keywords'],source['max_pages']):
+                    self.keep(run_id,pages,*item)
+                with store.db() as db: db.execute('UPDATE web_runs SET progress=? WHERE id=?',(len(pages),run_id))
+                robots=Robots()
+            else:
+                try: robots=await asyncio.to_thread(load_robots,site_root(base))
+                except ValueError as error:
+                    if not ARCHIVE_FALLBACK: raise
+                    # Unreachable from this server: read Internet Archive copies instead (it applies its own exclusions).
+                    robots=Robots();live=False;live_error=str(error)
+            pending=[] if connector else [base];seen=set();scores={};rebased=0
             terms=[t for t in re.split(r'[,，;；\s]+',source['keywords']) if t]
             while pending and len(seen)<source['max_pages']:
                 if self.cancelled(run_id): return
@@ -455,16 +583,8 @@ class Collector:
                     else: title,body=unquote(Path(urlsplit(final).path).name) or final,text
                     if len(body.strip())<20: raise ValueError('页面无足够可提取正文，可能需要登录或动态渲染。')
                     if archived and CHALLENGE.search(title+' '+body[:500]): raise ValueError('网页存档中保存的也是人机验证页面。')
-                    if len(body)>MAX_BODY: body=body[:MAX_BODY-len(TRUNCATED)]+TRUNCATED
                     title=(('［网页存档 '+archived+'］') if archived else '')+(title or final)
-                    digest=hashlib.sha256(body.encode()).hexdigest()
-                    if any(p['digest']==digest for p in pages): continue
-                    # Snapshot is immutable and downloaded only as an attachment, never executed.
-                    snapshot='web-'+str(run_id)+'-'+hashlib.sha256(final.encode()).hexdigest()[:12]+'-'+hashlib.sha256(raw).hexdigest()[:16]+('.pdf' if ctype=='application/pdf' else '.html')
-                    (store.directory/'uploads'/snapshot).write_bytes(raw)
-                    with store.db() as db:
-                        page_id=db.execute('INSERT INTO web_pages(run_id,url,title,body,date,fetched_at,digest,snapshot) VALUES (?,?,?,?,?,?,?,?)',(run_id,final,title[:230],body,parser.date,now(),digest,snapshot)).lastrowid
-                    pages.append({'id':page_id,'title':title[:230],'body':body,'url':final,'digest':digest})
+                    if not self.keep(run_id,pages,final,title,body,parser.date,raw,ctype): continue
                     for href in parser.links:
                         try: link=clean_url(urljoin(final,href))
                         except ValueError:continue

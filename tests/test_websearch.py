@@ -358,3 +358,37 @@ def test_model_proxy_accepts_only_loopback_http():
     assert model.loopback_proxy('') is None and model.loopback_proxy('http://127.0.0.1:7890')=='http://127.0.0.1:7890'
     for bad in ('http://10.0.0.2:7890','https://127.0.0.1:7890','socks5://127.0.0.1:7890','http://127.0.0.1'):
         with pytest.raises(ValueError):model.loopback_proxy(bad)
+
+def test_api_connectors_route_and_parse(web_client,monkeypatch):
+    assert websearch.api_connector('https://www.federalregister.gov/documents/2026/08/03/2026-15628/x') is websearch.federal_register
+    assert websearch.api_connector('https://www.ecfr.gov/current/title-15/part-744') is websearch.ecfr
+    assert websearch.api_connector('https://ofac.treasury.gov/specially-designated-nationals-and-blocked-persons-list-sdn-human-readable-lists') is websearch.ofac_sdn
+    assert websearch.api_connector('https://pasal.id/') is None
+    assert websearch.english_terms('制裁 出口管制 entity list 印尼')==['entity','list','Indonesia']
+    monkeypatch.setattr(websearch,'load_robots',lambda origin:websearch.Robots('User-agent: *\nDisallow: /documents/search\n'))
+    requested=[]
+    def api(url,base,robots=None,relaxed=False,limit=websearch.MAX_BYTES):
+        requested.append(url)
+        if 'documents.json' in url:
+            return url,json.dumps({'results':[{'title':'Entity List Additions','type':'Rule','html_url':'https://www.federalregister.gov/documents/2026/08/03/2026-15628/entity','raw_text_url':'https://www.federalregister.gov/documents/full_text/text/2026/08/03/2026-15628.txt','publication_date':'2026-08-03','abstract':'short'}]}),b'{}','application/json'
+        if url.endswith('.txt'):
+            html='<html><pre>港口设备故障导致原料延迟七天，库存仅能维持三天。Entity List additions for Indonesia.</pre></html>'
+            return url,html,html.encode(),'text/plain'
+        if 'SDN.CSV' in url:
+            data='36,"AEROCARIBBEAN AIRLINES",-0- ,"CUBA",-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0- \n99,"PT CONTOH",-0- ,"SDGT",-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,-0- ,"Jakarta"\n'
+            return url,data,data.encode(),'text/csv'
+        if 'ADD.CSV' in url:
+            data='99,1,"Jl. Sudirman","Jakarta","Indonesia",-0- \n'
+            return url,data,data.encode(),'text/csv'
+        raise AssertionError(url)
+    monkeypatch.setattr(websearch,'fetch_page',api);monkeypatch.setattr(websearch.model,'call_model',fake_model)
+    items=websearch.federal_register('https://www.federalregister.gov/','sanctions Indonesia 制裁',5)
+    assert items[0][1]=='Rule：Entity List Additions' and 'Indonesia' in items[0][2] and items[0][3]=='2026-08-03'
+    assert 'conditions%5Bterm%5D=sanctions+Indonesia' in requested[0]
+    sdn=websearch.ofac_sdn('https://sanctionslist.ofac.treas.gov/Home/SdnList','sanctions entity list 印尼',3)
+    assert len(sdn)==1 and 'PT CONTOH' in sdn[0][2] and 'AEROCARIBBEAN' not in sdn[0][2]
+    with pytest.raises(ValueError,match='英文关键词'):websearch.federal_register('https://www.federalregister.gov/','制裁',5)
+    # A source on an API host goes through the connector and the normal AI review.
+    sid=add_source(web_client,url='https://www.federalregister.gov/',keywords='港口 原料 Indonesia')
+    run=process(web_client,sid)
+    assert run['status']=='completed' and run['items'][0]['title']=='Rule：Entity List Additions'
