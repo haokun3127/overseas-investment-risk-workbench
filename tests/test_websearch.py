@@ -399,3 +399,84 @@ def test_https_host_header_has_no_default_port():
     c.send=lambda data:sent.append(data)
     c.putrequest('GET','/file.csv?X-Amz-Signature=x');c.endheaders()
     assert b'Host: bucket.s3.amazonaws.com\r\n' in sent[0]
+
+def test_source_batch_import_groups_toggle_delete_and_group_run(web_client,monkeypatch):
+    c=web_client
+    items=[{'name':'印尼法律部','url':'https://kemenkum.go.id','keywords':'peraturan 法规','category':'一、印尼国内'},
+           {'name':'重复','url':'https://kemenkum.go.id/','keywords':'x','category':'一、印尼国内'},
+           {'name':'OJK','url':'https://ojk.go.id/','keywords':'OJK','category':'三、印尼行政'},
+           {'name':'坏地址','url':'ftp://bad.example/x','keywords':'x','category':'三、印尼行政'}]
+    r=c.post('/api/web/sources/import',json={'items':items,'max_pages':3,'allow_external':True}).json()
+    assert r['created']==2 and r['skipped']==1 and r['errors'][0]['row']==4
+    again=c.post('/api/web/sources/import',json={'items':items[:1],'allow_external':True}).json()
+    assert again['created']==0 and again['skipped']==1
+    listing=c.get('/api/web/sources?category=一、印尼国内').json()
+    assert listing['total']==1 and listing['items'][0]['max_pages']==3 and listing['items'][0]['run_count']==0
+    assert {g['name']:g['count'] for g in c.get('/api/web/sources').json()['groups']}=={'一、印尼国内':1,'三、印尼行政':1}
+    assert c.get('/api/web/sources?q=ojk').json()['total']==1
+    sid=listing['items'][0]['id']
+    assert c.post(f'/api/web/sources/{sid}/toggle',json={'enabled':False}).status_code==200
+    assert '停用' in c.post('/api/web/runs',json={'source_id':sid}).json()['detail']
+    assert '没有已启用' in c.post('/api/web/runs/group',json={'category':'一、印尼国内'}).json()['detail']
+    c.post(f'/api/web/sources/{sid}/toggle',json={'enabled':True})
+    assert c.post('/api/web/runs/group',json={'category':'一、印尼国内'}).json()['queued']==1
+    assert '等待当前检索结束' in c.delete(f'/api/web/sources/{sid}').json()['detail']
+    with c.app.state.store.db() as db: db.execute("UPDATE web_runs SET status='cancelled'")
+    assert c.delete(f'/api/web/sources/{sid}').status_code==200
+    assert c.get('/api/web/sources?category=一、印尼国内').json()['total']==0
+    assert c.get('/api/web/runs').json()['items'][0]['source_id']==sid  # history keeps the deleted source's runs
+    assert c.post('/api/web/runs',json={'source_id':sid}).status_code==404
+
+def test_error_hints_are_business_language():
+    assert '印尼境内' in websearch.error_hint('无法读取 robots.txt：网页连接失败：SSLEOFError；网页存档：网页存档中没有可用快照。')
+    assert '人工下载' in websearch.error_hint('网站返回 HTTP 403。；网页存档：网页存档中没有可用快照。')
+    assert '遵守' in websearch.error_hint('robots.txt 不允许采集此页。')
+    assert '脚本动态加载' in websearch.error_hint('页面无足够可提取正文，可能需要登录或动态渲染。')
+    assert websearch.error_hint('')=='' and websearch.error_hint('未知错误')==''
+
+def test_unchanged_pages_reuse_previous_verdict(web_client,monkeypatch):
+    calls=[]
+    async def counting(settings,payload,system=None):
+        calls.append(len(payload['pages']));return await fake_model(settings,payload,system)
+    monkeypatch.setattr(websearch,'fetch_page',fake_fetch);monkeypatch.setattr(websearch.model,'call_model',counting)
+    c=web_client;sid=add_source(c)
+    first=process(c,sid);second=process(c,sid)
+    assert first['status']==second['status']=='completed' and calls==[2]
+    assert all(p['reason'].startswith('（内容未变化，沿用上次判定）') for p in second['items'])
+    assert sorted(p['relevant'] for p in second['items'])==sorted(p['relevant'] for p in first['items'])
+    detail=c.get('/api/web/runs/'+str(second['id'])).json()
+    assert 'hint' in detail and all('hint' in e for e in detail['errors'])
+
+def test_world_bank_connector(monkeypatch):
+    assert websearch.api_connector('https://documents.worldbank.org/') is websearch.world_bank
+    monkeypatch.setattr(websearch,'load_robots',lambda origin:websearch.Robots())
+    def api(url,base,robots=None,relaxed=False,limit=websearch.MAX_BYTES):
+        if 'search.worldbank.org' in url:
+            assert 'qterm=Indonesia+investment' in url
+            return url,json.dumps({'documents':{'D1':{'display_title':'Indonesia\n   Economic Quarterly','docty':'Report','docdt':'2026-06-01T00:00:00Z','url':'http://documents.worldbank.org/x','txturl':'http://documents.worldbank.org/x.txt','abstracts':{'cdata!':'Short abstract.'}},'facets':{}}}),b'{}','application/json'
+        if url.endswith('.txt'):
+            assert url.startswith('https://')
+            return url,'Full report text about private investment in Indonesia.',b'full','text/plain'
+        raise AssertionError(url)
+    monkeypatch.setattr(websearch,'fetch_page',api)
+    items=websearch.world_bank('https://documents.worldbank.org/','Indonesia investment 投资',5)
+    assert items[0][1]=='世界银行 Report：Indonesia Economic Quarterly' and items[0][2].startswith('Full report') and items[0][3]=='2026-06-01'
+
+def test_script_pages_use_isolated_renderer(web_client,monkeypatch):
+    with pytest.raises(ValueError):websearch.loopback_renderer('http://10.0.0.3:8791/render')
+    assert websearch.loopback_renderer('http://127.0.0.1:8791/render')==('127.0.0.1',8791,'/render')
+    def shell(url,base,robots=None,relaxed=False):
+        if url.endswith('robots.txt'):return url,'User-agent: *\nDisallow: /private/\n',b'','text/plain'
+        html='<html><title>JS</title><div id="app"></div><script src="app.js"></script></html>'
+        return url,html,html.encode(),'text/html'
+    rendered=[]
+    def render(url):
+        rendered.append(url)
+        return url,'<title>原料供应通报</title><article>港口设备故障导致原料延迟七天，库存仅能维持三天生产。</article>'
+    monkeypatch.setattr(websearch,'fetch_page',shell);monkeypatch.setattr(websearch,'render_page',render)
+    monkeypatch.setattr(websearch,'RENDERER',('127.0.0.1',8791,'/render'));monkeypatch.setattr(websearch.model,'call_model',fake_model)
+    run=process(web_client,add_source(web_client,max_pages=1))
+    assert run['status']=='completed' and rendered==['https://source.example/news/'] and run['items'][0]['title']=='原料供应通报'
+    monkeypatch.setattr(websearch,'render_page',lambda url:('https://other.example/','<title>x</title><p>'+'外站内容'*20+'</p>'))
+    run=process(web_client,add_source(web_client,max_pages=1))
+    assert run['status']=='failed' and '动态渲染' in run['errors'][0]['error']  # rendered page left the scope: ignored

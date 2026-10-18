@@ -1,0 +1,32 @@
+[Unit]
+Description=Workbench page renderer (headless Chromium, localhost only)
+After=network-online.target mihomo.service
+
+[Service]
+Type=simple
+User=renderer
+Group=renderer
+WorkingDirectory=/opt/renderer
+EnvironmentFile=/etc/web-renderer.env
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/renderer/browsers
+Environment=HOME=/opt/renderer
+ExecStart=/opt/renderer/venv/bin/python /opt/renderer/web_renderer.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/renderer
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+# The browser may talk only to localhost: the egress proxy (and nothing on the LAN or the internet directly).
+IPAddressDeny=any
+IPAddressAllow=localhost
+MemoryMax=1200M
+TasksMax=256
+CPUQuota=150%
+
+[Install]
+WantedBy=multi-user.target
