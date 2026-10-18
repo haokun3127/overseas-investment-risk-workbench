@@ -601,3 +601,21 @@ def test_changed_review_standard_does_not_reuse_old_verdicts(web_client,monkeypa
     c=web_client;sid=add_source(c)
     process(c,sid);monkeypatch.setattr(websearch,'REVIEW_VERSION',websearch.REVIEW_VERSION+1);process(c,sid)
     assert len(calls)==2
+
+def test_quote_check_ignores_whitespace_and_width_but_not_words(web_client,monkeypatch):
+    def pdfish(url,base,robots=None,relaxed=False,**kw):
+        if url.endswith('robots.txt'):return url,'',b'','text/plain'
+        if url.endswith('.xml'):raise websearch.HttpStatus(404)
+        html='<title>协定</title><pre>Article 3\n   The Parties   shall\nrecognise “investment” (１)</pre>'
+        return url,html,html.encode(),'text/html'
+    def model_quote(q):
+        async def call(settings,payload,system=None):
+            return {'items':[{'id':p['id'],'relevant':True,'reason':'条款','quote':q} for p in payload['pages']]},{}
+        return call
+    monkeypatch.setattr(websearch,'fetch_page',pdfish)
+    monkeypatch.setattr(websearch.model,'call_model',model_quote('The Parties shall recognise "investment" (1)'))
+    run=process(web_client,add_source(web_client,max_pages=1))
+    assert run['items'][0]['relevant']==1
+    monkeypatch.setattr(websearch.model,'call_model',model_quote('The Parties shall protect "investment"'))
+    run=process(web_client,add_source(web_client,max_pages=1))
+    assert run['items'][0]['relevant'] is None  # different words are still rejected

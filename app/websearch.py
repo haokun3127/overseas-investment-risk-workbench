@@ -12,6 +12,7 @@ import socket
 import ssl
 import logging
 import time
+import unicodedata
 import zlib
 from html.parser import HTMLParser
 from pathlib import Path
@@ -410,6 +411,13 @@ def navigation_page(url,parser,body):
     path=urlsplit(url).path.rstrip('/')
     return path=='' or bool(re.fullmatch(r'/(index|home|beranda|default)(\.\w+)?|/(id|en|zh|zh-cn|cn)',path,re.I))
 
+QUOTE_MARKS=str.maketrans({'“':'"','”':'"','‘':"'",'’':"'",' ':' '})
+
+def loose(text):
+    """Text for quote matching: same words and characters, but whitespace, full/half-width forms and curly
+    quotes do not count (models reflow PDF and RSS text)."""
+    return ' '.join(unicodedata.normalize('NFKC',text).translate(QUOTE_MARKS).split())
+
 UNJUDGED='AI 未给出可核验的判定（格式无效或引用无法在原文中定位），请查看原文后人工处理。'
 
 def site_root(url):
@@ -729,7 +737,7 @@ class Collector:
             if not isinstance(item,dict) or type(item.get('id')) is not int or item['id'] not in snippets or item['id'] in verdicts or type(item.get('relevant')) is not bool: continue
             reason=item.get('reason');quote=item.get('quote')
             if not isinstance(reason,str) or not reason.strip() or len(reason)>2000 or not isinstance(quote,str) or len(quote)>6000: continue
-            if item['relevant'] and (len(quote)<6 or quote not in snippets[item['id']]): continue
+            if item['relevant'] and (len(quote)<6 or loose(quote) not in loose(snippets[item['id']])): continue
             verdicts[item['id']]=(item['relevant'],reason,quote)
         return verdicts
     def keep(self,run_id,pages,url,title,body,date,raw,ctype):
