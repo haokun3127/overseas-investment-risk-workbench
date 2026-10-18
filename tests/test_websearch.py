@@ -526,3 +526,8 @@ def test_feed_items_without_text_read_the_linked_document(monkeypatch):
     monkeypatch.setattr(websearch,'fetch_page',fetch)
     items=websearch.feed_pages('https://source.example/',websearch.Robots(),1,['港口'])
     assert len(items)==1 and items[0][0]=='https://source.example/media/b.pdf' and items[0][5]=='application/pdf' and 'Full agreement' in items[0][2]
+
+def test_challenge_pages_in_other_languages_are_recognised():
+    for text in ('Melakukan verifikasi keamanan','Performing security verification','Verify you are human','Just a moment...'):
+        assert websearch.CHALLENGE.search(text)
+    assert not websearch.CHALLENGE.search('Peraturan Menteri Ketenagakerjaan tentang tenaga kerja asing')

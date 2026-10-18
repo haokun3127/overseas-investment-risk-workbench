@@ -311,7 +311,7 @@ def archived_page(url):
     _,text,raw,ctype=archive_get('https://web.archive.org/web/'+stamp+'id_/'+url,'https://web.archive.org/web/')
     return stamp[:4]+'-'+stamp[4:6]+'-'+stamp[6:8],text,raw,ctype
 
-CHALLENGE=re.compile(r'just a moment|attention required|checking your browser|access denied|enable javascript and cookies',re.I)
+CHALLENGE=re.compile(r'just a moment|attention required|checking your browser|access denied|enable javascript and cookies|security verification|verify you are (a )?human|verifikasi keamanan|memverifikasi|请完成安全验证|人机验证',re.I)
 SKIP_LINK=re.compile(r'(login|logout|signin|sign-in|signup|register|masuk|daftar|authenticate|/_layouts/|wp-admin|wp-login|/akun|/cart|whatsapp|facebook\.com|twitter\.com|linkedin\.com|/share|print=|\.(zip|rar|jpe?g|png|gif|svg|exe|docx?|xlsx?|pptx?|mp4|mp3)(\?|$))',re.I)
 DETAIL_LINK=re.compile(r'(\.pdf(\?|$)|peraturan/|putusan|perkara|detail|download|unduh|/uu-|nomor|tahun-\d{4}|/\d{4}/\d{2}/|/pages/|pengumuman/|siaran-pers/|berita/)',re.I)
 
