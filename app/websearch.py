@@ -565,7 +565,7 @@ def api_connector(url):
     return None
 
 ERROR_HINTS=(
-    ('模型服务','模型服务连接失败或超时，请到“模型与规则”检查连接后重试。'),
+    ('模型服务','模型服务暂时不可用（服务商故障、超时或配额问题）。已采集的页面都已保存，服务恢复后点击“重新筛选”即可，无需重新抓取。'),
     ('英文关键词','官方接口只支持英文检索，请在关键词里加上英文，例如 Indonesia、export control。'),
     ('robots.txt 不允许','网站的 robots.txt 禁止采集该页面，工作台遵守该规则。可改用该网站的官方接口，或人工下载后通过“资料与导入”上传。'),
     ('无法读取 robots.txt：网站返回 HTTP 5','网站服务器暂时故障，请稍后重试。'),
@@ -744,9 +744,13 @@ class Collector:
         try:
             if not self.settings.configured: raise ValueError('AI检索需要先配置模型服务。')
             if not source['allow_external']: raise ValueError('请授权将该网站的网页内容发送给外部AI服务。')
-            base=source['url'];live=True;live_error='';pages=[];unjudged=0
-            connector=api_connector(base)
-            if connector:
+            base=source['url'];live=True;live_error='';pages=[];unjudged=0;review_only=bool(source.get('review_only'))
+            connector=None if review_only else api_connector(base)
+            if review_only:
+                # Re-review: pages were collected earlier but the model service failed; no fetching again.
+                pages=store.rows('SELECT id,title,body,url,digest FROM web_pages WHERE run_id=? AND relevant IS NULL',(run_id,))
+                robots=Robots()
+            elif connector:
                 # Official API instead of crawling (see api_connector); the review below is the same.
                 for item in await asyncio.to_thread(connector,base,source['keywords'],source['max_pages']):
                     self.keep(run_id,pages,*item)
@@ -758,9 +762,9 @@ class Collector:
                     if not ARCHIVE_FALLBACK: raise
                     # Unreachable from this server: read Internet Archive copies instead (it applies its own exclusions).
                     robots=Robots();live=False;live_error=str(error)
-            pending=[] if connector else [base];seen=set();scores={};rebased=0
+            pending=[] if connector or review_only else [base];seen=set();scores={};rebased=0
             terms=[t for t in re.split(r'[,，;；\s]+',source['keywords']) if t]
-            if live and not connector and source['max_pages']>1 and robots.can_fetch(base):
+            if live and not connector and not review_only and source['max_pages']>1 and robots.can_fetch(base):
                 for link in await asyncio.to_thread(sitemap_links,base,robots,terms):
                     if link not in scores: scores[link]=link_score(link,'',terms);pending.append(link)
                 pending[1:]=sorted(pending[1:],key=lambda link:-scores.get(link,0))
@@ -822,7 +826,7 @@ class Collector:
                 delay=max(1,robots.crawl_delay() or 1)
                 if delay>30: raise ValueError('网站要求较长采集间隔，请联系站点管理员后调整采集方式。')
                 await asyncio.sleep(delay)
-            if not pages and not connector and robots.can_fetch(base):
+            if not pages and not connector and not review_only and robots.can_fetch(base):
                 # Pages blocked but the site's RSS/Atom feed open (e.g. WordPress /feed/): use its items.
                 for item in await asyncio.to_thread(feed_pages,base,robots,source['max_pages'],terms): self.keep(run_id,pages,*item)
             if not pages: raise ValueError('未采集到可检索正文，请查看逐页失败原因或更换入口。')
@@ -965,6 +969,19 @@ def router(store,settings):
         with store.db() as db:
             if not db.execute("UPDATE web_runs SET status='cancelled',finished_at=? WHERE id=? AND status IN ('queued','running')",(now(),run_id)).rowcount:raise HTTPException(409,'任务已结束或不存在。')
         return {'ok':True}
+    @api.post('/runs/{run_id}/review')
+    def rereview(run_id:int):
+        if not settings.configured:raise ValueError('请先配置AI模型。')
+        run=store.one('SELECT * FROM web_runs WHERE id=?',(run_id,))
+        if not run:raise HTTPException(404,'检索任务不存在。')
+        if run['status'] not in ('failed','completed'):raise ValueError('任务尚未结束。')
+        if not store.one('SELECT id FROM web_pages WHERE run_id=? AND relevant IS NULL LIMIT 1',(run_id,)):raise ValueError('该任务没有待筛选的页面。')
+        config=json.loads(run['config_json']);config['review_only']=True
+        with store.db() as db:
+            if db.execute("SELECT id FROM web_runs WHERE source_id=? AND status IN ('queued','running')",(run['source_id'],)).fetchone():raise ValueError('该网站有正在进行的检索，请稍后再试。')
+            db.execute("UPDATE web_runs SET status='queued',error='',finished_at=NULL,config_json=? WHERE id=?",(json.dumps(config,ensure_ascii=False),run_id))
+        store.audit('website_rereview',f'id={run_id}')
+        return {'id':run_id}
     @api.get('/pages/{page_id}')
     def page(page_id:int):
         page=store.one('SELECT id,title,url,body,date,fetched_at FROM web_pages WHERE id=?',(page_id,))

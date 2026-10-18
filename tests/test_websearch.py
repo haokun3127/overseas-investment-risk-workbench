@@ -544,3 +544,20 @@ def test_archive_prefers_richest_capture_when_newest_is_a_shell(monkeypatch):
     monkeypatch.setattr(websearch,'archive_get',get)
     date,text,raw,ctype=websearch.archived_page('https://kemenkum.go.id/')
     assert date=='2026-02-26' and raw==b'rich'
+
+def test_rereview_after_model_outage_does_not_refetch(web_client,monkeypatch):
+    calls=[]
+    def counting_fetch(url,base,robots=None,relaxed=False,**kw):
+        calls.append(url);return fake_fetch(url,base,robots,relaxed)
+    async def down(settings,payload,system=None):raise ValueError('模型服务返回 HTTP 503，请检查服务地址、权限或配额。')
+    monkeypatch.setattr(websearch,'fetch_page',counting_fetch);monkeypatch.setattr(websearch.model,'call_model',down)
+    c=web_client;run=process(c,add_source(c))
+    assert run['status']=='failed' and len(run['items'])==2 and '重新筛选' in run['hint']
+    fetched=len(calls)
+    monkeypatch.setattr(websearch.model,'call_model',fake_model)
+    assert c.post(f"/api/web/runs/{run['id']}/review").json()['id']==run['id']
+    stored=c.app.state.store.one('SELECT * FROM web_runs WHERE id=?',(run['id'],))
+    asyncio.run(c.app.state.collector.process(stored))
+    again=c.get('/api/web/runs/'+str(run['id'])).json()
+    assert again['status']=='completed' and len(calls)==fetched and all(p['relevant'] is not None for p in again['items'])
+    assert '没有待筛选' in c.post(f"/api/web/runs/{run['id']}/review").json()['detail']
