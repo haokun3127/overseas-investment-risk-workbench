@@ -36,26 +36,29 @@ class Worker:
             if not claimed: return
         try:
             doc = self.store.one('SELECT * FROM documents WHERE id=?',(job['document_id'],))
+            company=json.loads(job.get('company_json') or '{}')
             rules = self.store.setting('rules')
             if not self.settings.configured:
                 raise ValueError('尚未配置模型服务，请填写 .env 后重启。')
             if not rules['confirmed']:
                 raise ValueError('风险规则尚未确认。')
-            external = self.settings.model_mode=='external'
-            if external and not doc['allow_external']:
+            external = True
+            if not doc['allow_external']:
                 raise ValueError('该资料未获准发送到外部模型。')
+            context=company if company.get('allow_external') else {}
             chunks = self.store.rows('SELECT * FROM chunks WHERE document_id=? ORDER BY id',(doc['id'],))
             with self.store.db() as db:
                 db.execute('UPDATE jobs SET total=? WHERE id=?',(len(chunks),job['id']))
             results, events, usage, knowledge = [], [], [], {}
             for index, chunk in enumerate(chunks):
-                hits = retrieve(self.store,chunk['text'],external=external)
+                hits = retrieve(self.store,chunk['text'],external=external,company_id=0)
                 references = {f'S{chunk["id"]}':{'text':chunk['text'],'kind':'source','document_id':doc['id'],'locator':chunk['locator'],'title':doc['title']}}
                 for hit in hits:
                     references[f'K{hit["id"]}'] = {**hit,'kind':'knowledge'}
                     knowledge[str(hit['id'])] = hit
-                payload = {'scope':{'country':'印度尼西亚','industry':'制造业'},'rules':rules,
+                payload = {'scope':{'country':'印度尼西亚','industry':context.get('industry') or '未指定行业'},'rules':rules,
                     'document':{'title':doc['title'],'date':doc['date'],'source':doc['source']},
+                    'company':context,
                     'part':f'{index+1}/{len(chunks)}','references':[{'reference':key,**value} for key,value in references.items()]}
                 raw, used = await model.call_model(self.settings,payload)
                 result = model.validate_result(raw,references,rules)
@@ -72,6 +75,7 @@ class Worker:
             events = list(unique.values())
             decision = 'risk' if events else ('insufficient' if any(r['decision']=='insufficient' for r in results) else 'non_risk')
             result_blob = {'decision':decision,'parts':results,'prompt_version':model.PROMPT_VERSION,
+                           'company_context':context,
                            'partial_context':len(chunks)>1,'review_required':True,
                            'model_config':{'wire_api':self.settings.model_wire_api,'reasoning_effort':self.settings.model_reasoning_effort,'store':self.settings.model_store}}
             with self.store.db() as db:

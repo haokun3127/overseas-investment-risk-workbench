@@ -25,4 +25,4 @@ class Settings:
 
     @property
     def configured(self):
-        return bool(self.model_base_url and self.model_name and (self.model_mode == 'local' or self.model_api_key))
+        return bool(self.model_base_url and self.model_name and self.model_mode == 'external' and self.model_api_key)

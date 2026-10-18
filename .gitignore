@@ -9,3 +9,6 @@ qa/
 plan_qa/
 dist/
 *.docx
+
+.claude/settings.local.json
+*访问凭据*.txt

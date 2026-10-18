@@ -130,7 +130,7 @@ def test_redirect_and_size_limits(monkeypatch):
         status=302
         def getheader(self,name,default=None):return 'https://evil.example/' if name=='Location' else default
     class Connection:
-        def __init__(self,host,port,ip,tls):connected.append((host,ip,tls))
+        def __init__(self,host,port,ip,tls,proxy=None):connected.append((host,ip,tls))
         def request(self,*args,**kwargs):pass
         def getresponse(self):return Response()
         def close(self):pass
@@ -172,3 +172,53 @@ def test_snapshots_do_not_overwrite_when_redirected_page_changes(web_client,monk
     pages=web_client.app.state.store.rows('SELECT snapshot FROM web_pages WHERE run_id=? ORDER BY id',(run['id'],))
     assert len(pages)==2 and pages[0]['snapshot']!=pages[1]['snapshot']
     assert [(web_client.app.state.store.directory/'uploads'/p['snapshot']).read_bytes() for p in pages]==raws
+
+def test_fallback_proxy_validation():
+    assert websearch.loopback_proxy('')is None
+    assert websearch.loopback_proxy('http://127.0.0.1:7890')==('127.0.0.1',7890)
+    for bad in ('http://10.0.0.5:7890','socks5://127.0.0.1:7890','http://127.0.0.1','http://u:p@127.0.0.1:7890'):
+        with pytest.raises(ValueError):websearch.loopback_proxy(bad)
+
+def fallback_harness(monkeypatch,direct):
+    calls=[]
+    class Response:
+        def __init__(self,status):self.status=status
+        def getheader(self,name,default=None):return 'text/html' if name=='Content-Type' else default
+        def read(self,size):return b'<title>ok</title>hello'
+    class Connection:
+        def __init__(self,host,port,ip,tls,proxy=None):self.ip,self.proxy=ip,proxy
+        def request(self,*a,**kw):
+            calls.append((self.ip,self.proxy))
+            if not self.proxy and direct=='refused':raise ConnectionRefusedError()
+        def getresponse(self):return Response(403 if (not self.proxy and direct==403) else 200)
+        def close(self):pass
+    monkeypatch.setattr(websearch,'PinnedConnection',Connection)
+    return calls
+
+def test_fallback_proxy_only_after_direct_failure(monkeypatch):
+    url='https://source.example/news/'
+    monkeypatch.setattr(websearch,'public_address',lambda host,port:'8.8.8.8')
+    monkeypatch.setattr(websearch,'FETCH_PROXY',None)
+    calls=fallback_harness(monkeypatch,'refused')
+    with pytest.raises(ValueError,match='网页连接失败'):websearch.fetch_page(url,url)
+    assert calls==[('8.8.8.8',None)]
+    monkeypatch.setattr(websearch,'FETCH_PROXY',('127.0.0.1',7890))
+    for direct in ('refused',403):
+        calls=fallback_harness(monkeypatch,direct)
+        assert websearch.fetch_page(url,url)[1].endswith('hello')
+        assert calls==[('8.8.8.8',None),('8.8.8.8',('127.0.0.1',7890))]
+    calls=fallback_harness(monkeypatch,200)
+    websearch.fetch_page(url,url)
+    assert calls==[('8.8.8.8',None)]
+
+def test_fallback_proxy_keeps_private_address_block(monkeypatch):
+    url='https://source.example/news/'
+    monkeypatch.setattr(websearch,'FETCH_PROXY',('127.0.0.1',7890))
+    calls=fallback_harness(monkeypatch,200)
+    monkeypatch.setattr(socket,'getaddrinfo',lambda *a,**kw:[(socket.AF_INET,socket.SOCK_STREAM,6,'',('10.0.0.8',443))])
+    with pytest.raises(ValueError,match='公网地址'):websearch.fetch_page(url,url)
+    assert calls==[]
+    def nxdomain(*a,**kw):raise socket.gaierror('nx')
+    monkeypatch.setattr(socket,'getaddrinfo',nxdomain)
+    websearch.fetch_page(url,url)
+    assert calls==[(None,('127.0.0.1',7890))]

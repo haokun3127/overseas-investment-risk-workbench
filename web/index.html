@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light"><meta name="theme-color" content="#f3f6fb"><title>海外投资风险工作台</title><link rel="icon" href="static/favicon.svg?v=20261011-glass3" type="image/svg+xml"><link rel="stylesheet" href="static/style.css?v=20261011-glass3"><link rel="stylesheet" href="static/workspace.css?v=20261011-glass3"><link rel="stylesheet" href="static/websearch.css?v=20261011-glass3"><link rel="stylesheet" href="static/polish.css?v=20261011-glass3"><link rel="stylesheet" href="static/glass.css?v=20261011-glass3"><script src="static/workspace.js?v=20261011-glass3" defer></script><script src="static/workflows.js?v=20261011-glass3" defer></script><script src="static/features.js?v=20261011-glass3" defer></script><script src="static/websearch.js?v=20261011-glass3" defer></script><script src="static/app.js?v=20261011-glass3" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light"><meta name="theme-color" content="#f3f6fb"><title>海外投资风险工作台</title><link rel="icon" href="static/favicon.svg?v=20261013-brief2" type="image/svg+xml"><link rel="stylesheet" href="static/style.css?v=20261013-brief2"><link rel="stylesheet" href="static/workspace.css?v=20261013-brief2"><link rel="stylesheet" href="static/websearch.css?v=20261013-brief2"><link rel="stylesheet" href="static/polish.css?v=20261013-brief2"><link rel="stylesheet" href="static/glass.css?v=20261013-brief2"><script src="static/workspace.js?v=20261013-brief2" defer></script><script src="static/workflows.js?v=20261013-brief2" defer></script><script src="static/features.js?v=20261013-brief2" defer></script><script src="static/websearch.js?v=20261013-brief2" defer></script><script src="static/app.js?v=20261013-brief2" defer></script><link rel="stylesheet" href="static/companies.css?v=20261013-brief2"><script src="static/companies.js?v=20261013-brief2" defer></script><link rel="stylesheet" href="static/report.css?v=20261013-brief2"></head>
 <body>
 <!--
 THESIS: An investment research terminal makes each risk traceable from source to review.
@@ -37,7 +37,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 <div id="shell" hidden>
   <aside class="sidebar">
     <a href="#overview" class="brand"><span class="brand-mark"><svg class="icon" aria-hidden="true"><use href="#i-mark"/></svg></span><span>海外投资<span class="brand-sub">风险分析工作台</span></span></a>
-    <div class="workspace"><span class="scope-dot"></span><div>印度尼西亚<small>制造业 · 业务工作区</small></div></div>
+    <div class="workspace"><span class="scope-dot"></span><div>印度尼西亚<small>多公司 · 业务工作区</small></div></div>
     <nav aria-label="主导航">
       <a href="#overview" data-nav="overview" title="风险总览"><svg class="icon" aria-hidden="true"><use href="#i-overview"/></svg><span>风险总览</span></a>
       <a href="#events" data-nav="events" title="风险事件"><svg class="icon" aria-hidden="true"><use href="#i-risk"/></svg><span>风险事件</span></a>
@@ -48,7 +48,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
       <a href="#report" data-nav="report" title="风险简报"><svg class="icon" aria-hidden="true"><use href="#i-documents"/></svg><span>风险简报</span></a>
       <a href="#settings" data-nav="settings" title="模型与规则"><svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg><span>模型与规则</span></a>
     </nav>
-    <div class="sidebar-bottom"><div class="local-system"><svg class="icon" aria-hidden="true"><use href="#i-server"/></svg><div>本地业务系统<span class="sidebar-hint" id="mode-label">正在读取模型状态</span><span class="storage-note">资料保存在本地</span></div></div><button class="text-button" id="logout">退出登录</button></div>
+    <div class="sidebar-bottom"><div class="local-system"><svg class="icon" aria-hidden="true"><use href="#i-server"/></svg><div>云端风险工作台<span class="sidebar-hint" id="mode-label">正在读取模型状态</span><span class="storage-note">资料保存在工作台服务器</span></div></div><button class="text-button" id="logout">退出登录</button></div>
   </aside>
   <div class="app-body">
     <header class="topbar"><div class="topbar-left"><button id="toggle-navigation" type="button" aria-label="收起导航" aria-expanded="true"><svg class="icon" aria-hidden="true"><use href="#i-menu"/></svg></button><span id="breadcrumb">工作台 / 风险总览</span></div><div class="topbar-right"><a href="#settings" id="model-status" class="status-chip">模型未连接</a><button class="text-button mobile-logout" id="mobile-logout">退出登录</button><span class="user-mark" aria-label="管理员">管理</span></div></header>
@@ -58,6 +58,6 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 </div>
 <div id="notice" class="toast" role="status" aria-live="polite" hidden></div>
 <dialog id="source-dialog" aria-labelledby="source-title"><div class="dialog-bar"><h2 id="source-title">原始资料</h2><button id="close-source" class="secondary">关闭</button></div><div id="source-content"></div></dialog>
-</body></html>
+<dialog id="company-dialog" class="company-dialog" aria-label="公司信息编辑"><div id="company-editor"></div></dialog></body></html>
 
 

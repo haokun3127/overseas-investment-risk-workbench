@@ -2,8 +2,6 @@ import asyncio
 import copy
 import io
 import json
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
@@ -24,8 +22,10 @@ def test_preflight_cancellation_and_worker_claim(client):
     check=client.post('/api/jobs/preflight',json={'document_ids':[doc_id]}).json()
     assert not check['ready'] and len(check['blockers'])==2
     assert check['items'][0]['issues']==['尚未授权外部分析']
-    s.model_mode='local';s.model_base_url='http://127.0.0.1:1/v1';s.model_name='test'
+    s.model_mode='external';s.model_base_url='https://example.test/v1';s.model_name='test';s.model_api_key='test'
     rules=copy.deepcopy(DEFAULT_RULES);rules['confirmed']=True;client.put('/api/rules',json=rules)
+    assert not client.post('/api/jobs/preflight',json={'document_ids':[doc_id]}).json()['ready']
+    client.patch(f'/api/documents/{doc_id}/policy',json={'allow_external':True})
     assert client.post('/api/jobs/preflight',json={'document_ids':[doc_id]}).json()['ready']
     jid=client.post('/api/jobs',json={'document_ids':[doc_id]}).json()['items'][0]['id']
     store=client.app.state.store
@@ -211,7 +211,11 @@ def test_citation_and_classification_validation():
 def test_local_mode_endpoint_boundary(tmp_path):
     with pytest.raises(ValueError):validate_endpoint(Settings(data_dir=tmp_path,model_mode='local',model_base_url='https://8.8.8.8/v1'))
     with pytest.raises(ValueError):validate_endpoint(Settings(data_dir=tmp_path,model_mode='external',model_base_url='http://example.com/v1'))
-    validate_endpoint(Settings(data_dir=tmp_path,model_mode='local',model_base_url='http://127.0.0.1:1234/v1'))
+    with pytest.raises(ValueError):validate_endpoint(Settings(data_dir=tmp_path,model_mode='local',model_base_url='http://127.0.0.1:1234/v1'))
+    validate_endpoint(Settings(data_dir=tmp_path,model_mode='external',model_base_url='https://example.test/v1'))
+    with pytest.raises(ValueError,match='仅支持外部'):
+        create_app(Settings(data_dir=tmp_path,model_mode='local'),run_worker=False)
+    assert not Settings(data_dir=tmp_path,model_mode='local',model_base_url='https://example.test',model_name='test',model_api_key='test').configured
 
 def test_demo_review_and_filtering(client):
     assert client.post('/api/demo').json()['added']==4
@@ -226,48 +230,44 @@ def test_demo_review_and_filtering(client):
     assert detail['evidence'][0]['quote'] in client.get(f'/api/documents/{detail["document_id"]}').json()['body']
     assert client.get('/api/events?date_from=2026-09-07').json()['total']==2
 
-class FakeModel(BaseHTTPRequestHandler):
-    response_kind='risk'
-    last_payload=None
-    def do_POST(self):
-        payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-        FakeModel.last_payload=payload
-        request=json.loads(payload['messages'][1]['content'])
-        source=next(r for r in request['references'] if r['kind']=='source')
-        result=valid_result(source['text'])
-        result['events'][0]['evidence'][0]['reference']=source['reference']
-        if self.response_kind=='bad':result['events'][0]['evidence'][0]['quote']='这是没有出现在原始资料中的伪造引用内容'
-        if self.response_kind in ('non_risk','insufficient'):result={'decision':self.response_kind,'reason':'合成协议测试结果','events':[]}
-        response={'choices':[{'message':{'content':json.dumps(result,ensure_ascii=False)}}],'usage':{'prompt_tokens':123,'completion_tokens':45}}
-        body=json.dumps(response,ensure_ascii=False).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(body)
-    def log_message(self,*args):pass
+def test_worker_api_protocol_and_failed_version_retention(client,monkeypatch):
+    import httpx
+    from app import model
+    response_kind='risk';captured=[]
+    def handle(request):
+        assert str(request.url)=='https://example.test/v1/chat/completions'
+        assert request.headers['authorization']=='Bearer test-key'
+        payload=json.loads(request.content);captured.append(payload)
+        source=next(r for r in json.loads(payload['messages'][1]['content'])['references'] if r['kind']=='source')
+        result=valid_result(source['text']);result['events'][0]['evidence'][0]['reference']=source['reference']
+        if response_kind=='bad':result['events'][0]['evidence'][0]['quote']='这是没有出现在原始资料中的伪造引用内容'
+        if response_kind in ('non_risk','insufficient'):result={'decision':response_kind,'reason':'合成协议测试结果','events':[]}
+        return httpx.Response(200,json={'choices':[{'message':{'content':json.dumps(result,ensure_ascii=False)}}],'usage':{'prompt_tokens':123,'completion_tokens':45}})
+    original=httpx.AsyncClient
+    monkeypatch.setattr(model.httpx,'AsyncClient',lambda **kwargs:original(transport=httpx.MockTransport(handle),**kwargs))
+    s=client.app.state.settings;s.model_mode='external';s.model_base_url='https://example.test/v1';s.model_name='synthetic-test-model';s.model_api_key='test-key'
+    rules=copy.deepcopy(DEFAULT_RULES);rules['confirmed']=True;client.put('/api/rules',json=rules)
+    doc_id=add(client,allow_external=True)
+    def run(kind):
+        nonlocal response_kind
+        response_kind=kind
+        job_id=client.post('/api/jobs',json={'document_ids':[doc_id]}).json()['items'][0]['id']
+        job=client.app.state.store.one('SELECT * FROM jobs WHERE id=?',(job_id,))
+        asyncio.run(client.app.state.worker.process(job))
+        return client.app.state.store.one('SELECT * FROM jobs WHERE id=?',(job_id,))
+    assert run('risk')['status']=='completed'
+    assert client.get('/api/events?demo=real').json()['total']==1
+    assert captured[0]['model']=='synthetic-test-model'
+    assert captured[0]['store'] is False
+    assert run('bad')['status']=='failed'
+    assert client.get('/api/events?demo=real').json()['total']==1
+    assert len(client.get(f'/api/documents/{doc_id}').json()['analyses'])==1
+    assert run('non_risk')['status']=='completed'
+    assert client.get('/api/events?demo=real').json()['total']==0
+    versions=client.get(f'/api/documents/{doc_id}').json()['analyses']
+    assert [a['version'] for a in versions]==[2,1]
+    assert versions[0]['decision']=='non_risk'
 
-def test_worker_real_http_protocol_and_failed_version_retention(client):
-    server=ThreadingHTTPServer(('127.0.0.1',0),FakeModel)
-    thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
-    try:
-        s=client.app.state.settings;s.model_mode='local';s.model_base_url=f'http://127.0.0.1:{server.server_port}/v1';s.model_name='synthetic-test-model'
-        rules=copy.deepcopy(DEFAULT_RULES);rules['confirmed']=True;client.put('/api/rules',json=rules)
-        doc_id=add(client)
-        def run(kind):
-            FakeModel.response_kind=kind
-            job_id=client.post('/api/jobs',json={'document_ids':[doc_id]}).json()['items'][0]['id']
-            job=client.app.state.store.one('SELECT * FROM jobs WHERE id=?',(job_id,))
-            asyncio.run(client.app.state.worker.process(job))
-            return client.app.state.store.one('SELECT * FROM jobs WHERE id=?',(job_id,))
-        assert run('risk')['status']=='completed'
-        assert client.get('/api/events?demo=real').json()['total']==1
-        assert FakeModel.last_payload['model']=='synthetic-test-model'
-        assert run('bad')['status']=='failed'
-        assert client.get('/api/events?demo=real').json()['total']==1
-        assert len(client.get(f'/api/documents/{doc_id}').json()['analyses'])==1
-        assert run('non_risk')['status']=='completed'
-        assert client.get('/api/events?demo=real').json()['total']==0
-        versions=client.get(f'/api/documents/{doc_id}').json()['analyses']
-        assert [a['version'] for a in versions]==[2,1]
-        assert versions[0]['decision']=='non_risk'
-    finally:
-        server.shutdown();server.server_close()
 
 def test_restart_marks_running_job_failed(client):
     doc_id=add(client);store=client.app.state.store
@@ -300,9 +300,9 @@ def test_backup_preserves_documents_and_files(client,tmp_path):
 
 def test_long_document_failed_part_saves_no_partial_analysis(client,monkeypatch):
     from app import model
-    s=client.app.state.settings;s.model_mode='local';s.model_base_url='http://127.0.0.1:1/v1';s.model_name='test'
+    s=client.app.state.settings;s.model_mode='external';s.model_base_url='https://example.test/v1';s.model_name='test';s.model_api_key='test'
     rules=copy.deepcopy(DEFAULT_RULES);rules['confirmed']=True;client.put('/api/rules',json=rules)
-    doc_id=add(client,body='这是测试用的风险资料正文。'*300)
+    doc_id=add(client,body='这是测试用的风险资料正文。'*300,allow_external=True)
     calls=[]
     async def fake(settings,payload):
         calls.append(payload)

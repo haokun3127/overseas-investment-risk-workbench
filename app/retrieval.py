@@ -8,10 +8,15 @@ def tokens(text):
         words.extend(phrase[i:i+2] for i in range(len(phrase)-1))
     return words
 
-def retrieve(store, query, external=False, limit=4):
+def retrieve(store, query, external=False, limit=4, company_id=None):
     condition = ' AND d.allow_external=1' if external else ''
     rows = store.rows('''SELECT c.id,c.document_id,c.locator,c.text,d.title,d.source,d.date FROM chunks c
         JOIN documents d ON d.id=c.document_id WHERE d.kind='knowledge' AND d.demo=0''' + condition)
+    # Company profiles are references only for their own selected company.
+    scoped=store.rows('SELECT document_id,id FROM companies WHERE document_id IS NOT NULL') if store.one("SELECT name FROM sqlite_master WHERE type='table' AND name='companies'") else []
+    owners={r['document_id']:r['id'] for r in scoped}
+    if company_id is None: company_id=store.setting('active_company')
+    rows=[r for r in rows if r['document_id'] not in owners or owners[r['document_id']]==company_id]
     if not rows:
         return []
     query_terms = set(tokens(query))

@@ -22,6 +22,7 @@ from .jobs import Worker
 from .retrieval import retrieve
 from .demo import seed
 from . import model
+from . import companies
 from .websearch import Collector, initialize as initialize_websearch, router as websearch_router
 
 class Credentials(BaseModel):
@@ -54,7 +55,10 @@ def password_hash(password,salt):
 
 def create_app(settings=None, run_worker=True):
     settings=settings or Settings()
+    if settings.model_mode != 'external':
+        raise ValueError('工作台仅支持外部模型 API，请配置 MODEL_MODE=external。')
     store=Store(settings.data_dir)
+    companies.initialize(store)
     worker=Worker(store,settings)
     initialize_websearch(store)
     collector=Collector(store,settings)
@@ -71,6 +75,7 @@ def create_app(settings=None, run_worker=True):
     app.state.store=store; app.state.worker=worker; app.state.settings=settings
     app.state.collector=collector
     app.include_router(websearch_router(store,settings))
+    app.include_router(companies.router(store))
 
     @app.middleware('http')
     async def guard(request,call_next):
@@ -162,7 +167,7 @@ def create_app(settings=None, run_worker=True):
         return {'configured':settings.configured,'mode':settings.model_mode,'model':settings.model_name,
                 'last_success':latest,
                 'base_url':settings.model_base_url,'wire_api':settings.model_wire_api,'reasoning_effort':settings.model_reasoning_effort,'store_responses':settings.model_store,'rules':store.setting('rules'),
-                'retrieval':'本地 BM25 文本检索（中文双字词）','prompt_version':'risk-evidence-v1'}
+                'retrieval':'服务端 BM25 文本检索（中文双字词，无需部署模型）','prompt_version':'risk-evidence-v1'}
 
     @app.put('/api/rules')
     async def rules(request:Request):
@@ -183,7 +188,7 @@ def create_app(settings=None, run_worker=True):
     async def model_check():
         if not settings.configured: raise HTTPException(409,'尚未配置模型服务，请填写 .env 并重启。')
         started=time.monotonic()
-        payload={'scope':{'country':'印度尼西亚','industry':'制造业'},'rules':DEFAULT_RULES,
+        payload={'scope':{'country':'印度尼西亚','industry':'连接测试'},'rules':DEFAULT_RULES,
                  'document':{'title':'连接检查（合成测试）'},'references':[],
                  'instruction':'本次仅检查连接，没有业务资料，请返回 insufficient、说明及空 events 数组。'}
         result,_=await model.call_model(settings,payload)
@@ -291,12 +296,12 @@ def create_app(settings=None, run_worker=True):
                 doc=db.execute('SELECT * FROM documents WHERE id=?',(doc_id,)).fetchone()
                 if not doc or doc['kind']!='event': raise ValueError(f'资料 {doc_id} 不是待分析资料。')
                 if doc['demo']: raise ValueError('内置演示资料不进入真实分析，请导入新的测试资料。')
-                if settings.model_mode=='external' and not doc['allow_external']: raise ValueError(f'资料 {doc_id} 未获准发送外部模型，请在原文页核实并修改授权范围。')
+                if not doc['allow_external']: raise ValueError(f'资料 {doc_id} 未获准发送外部模型，请在原文页核实并修改授权范围。')
             result=[]
             for doc_id in ids:
                 active=db.execute("SELECT id FROM jobs WHERE document_id=? AND status IN ('queued','running')",(doc_id,)).fetchone()
                 if active: result.append({'id':active['id'],'existing':True}); continue
-                job_id=db.execute("INSERT INTO jobs(document_id,status,created_at) VALUES (?,'queued',?)",(doc_id,now())).lastrowid
+                job_id=db.execute("INSERT INTO jobs(document_id,status,created_at,company_json) VALUES (?,'queued',?,?)",(doc_id,now(),companies.snapshot(store))).lastrowid
                 result.append({'id':job_id,'existing':False})
         return {'items':result}
 
@@ -333,7 +338,7 @@ def create_app(settings=None, run_worker=True):
             else:
                 if doc['kind']!='event': reasons.append('参考资料不能直接启动风险分析')
                 if doc['demo']: reasons.append('虚构演示资料不能进入真实分析')
-                if settings.model_mode=='external' and not doc['allow_external']: reasons.append('尚未授权外部分析')
+                if not doc['allow_external']: reasons.append('尚未授权外部分析')
             active=store.one("SELECT id FROM jobs WHERE document_id=? AND status IN ('queued','running')",(doc_id,))
             items.append({'id':doc_id,'title':doc['title'] if doc else f'资料 #{doc_id}','issues':reasons,'existing_job':active['id'] if active else None})
         blockers=[]
