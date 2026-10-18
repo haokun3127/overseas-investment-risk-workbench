@@ -21,6 +21,7 @@ class Settings:
     model_json_mode: bool = os.getenv('MODEL_JSON_MODE', 'true').lower() == 'true'
     secure_cookie: bool = os.getenv('SECURE_COOKIE', 'false').lower() == 'true'
     cookie_path: str = os.getenv('COOKIE_PATH', '/')
+    backup_dir: str = os.getenv('BACKUP_DIR', '')
     session_cookie_name: str = os.getenv('SESSION_COOKIE_NAME', 'risk_session')
     max_upload: int = 10 * 1024 * 1024
 

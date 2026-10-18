@@ -57,3 +57,12 @@ def test_delete_refused_while_analysis_is_queued(client):
     r=client.delete(f'/api/documents/{doc}')
     assert r.status_code==400 and '正在分析' in r.json()['detail']
     assert count(store,'documents','id=?',(doc,))==1
+
+def test_runtime_reports_latest_backup(tmp_path):
+    settings=Settings(data_dir=tmp_path/'data',backup_dir=str(tmp_path/'backups'),model_base_url='https://model.example/v1',model_name='m',model_api_key='k')
+    with TestClient(create_app(settings,run_worker=False),headers=HEADERS) as c:
+        c.post('/api/auth/setup',json={'password':'test-password-2026'})
+        assert c.get('/api/runtime').json()['backup']=={'created_at':None,'count':0}
+        for name,when in [('20261018-033000','2026-10-18T03:30:00'),('20261019-033000','2026-10-19T03:30:00')]:
+            (tmp_path/'backups'/name).mkdir(parents=True);(tmp_path/'backups'/name/'backup.json').write_text(json.dumps({'created_at':when}))
+        assert c.get('/api/runtime').json()['backup']=={'created_at':'2026-10-19T03:30:00','count':2}

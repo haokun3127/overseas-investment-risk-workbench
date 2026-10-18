@@ -1,0 +1,10 @@
+[Unit]
+Description=RAG workbench daily backup
+
+[Service]
+Type=oneshot
+User=rag-workbench
+Environment=PYTHON=/opt/rag-workbench/venv/bin/python
+EnvironmentFile=/etc/rag-workbench/workbench.env
+ExecStart=/bin/sh /opt/rag-workbench/current/scripts/backup-daily.sh
+Nice=10

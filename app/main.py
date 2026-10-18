@@ -466,6 +466,14 @@ def create_app(settings=None, run_worker=True):
             item['rule_version']=json.loads(item.pop('rules_json'))['version']
         return {'generated_at':now(),'total':total,'items':items,'scope':{'q':q,'level':level,'category':category,'review':review,'demo':demo,'date_from':date_from,'date_to':date_to}}
 
+    def last_backup():
+        if not settings.backup_dir:return None
+        marks=sorted(Path(settings.backup_dir).glob('*/backup.json'),key=lambda p:p.parent.name)
+        if not marks:return {'created_at':None,'count':0}
+        try:created=json.loads(marks[-1].read_text(encoding='utf-8'))['created_at']
+        except (OSError,ValueError,KeyError):created=None
+        return {'created_at':created,'count':len(marks)}
+
     @app.get('/api/runtime')
     def runtime():
         disk=shutil.disk_usage(store.directory)
@@ -474,7 +482,7 @@ def create_app(settings=None, run_worker=True):
                 'chunks':store.one('SELECT COUNT(*) n FROM chunks')['n'],
                 'analyses':store.one('SELECT COUNT(*) n FROM analyses')['n'],
                 'queue':store.rows('SELECT status,COUNT(*) count FROM jobs GROUP BY status'),
-                'worker_enabled':run_worker,'last_analysis':store.one('SELECT created_at,model,mode FROM analyses ORDER BY id DESC LIMIT 1')}
+                'worker_enabled':run_worker,'backup':last_backup(),'last_analysis':store.one('SELECT created_at,model,mode FROM analyses ORDER BY id DESC LIMIT 1')}
 
     app.mount('/static',StaticFiles(directory=ROOT/'web'),name='static')
     @app.get('/')
