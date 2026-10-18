@@ -561,3 +561,34 @@ def test_rereview_after_model_outage_does_not_refetch(web_client,monkeypatch):
     again=c.get('/api/web/runs/'+str(run['id'])).json()
     assert again['status']=='completed' and len(calls)==fetched and all(p['relevant'] is not None for p in again['items'])
     assert '没有待筛选' in c.post(f"/api/web/runs/{run['id']}/review").json()['detail']
+
+def test_navigation_pages_are_crawled_but_not_kept(web_client,monkeypatch):
+    p=websearch.PageParser();p.feed('<a href="/a">'+'Menu item '*3+'</a>'*1)
+    assert websearch.navigation_page('https://x.go.id/',p,'body text')
+    assert websearch.navigation_page('https://kemlu.go.id/id',p,'x')
+    hub=websearch.PageParser();hub.feed(''.join(f'<a href="/p{i}">Peraturan nomor {i} tahun 2026</a>' for i in range(30)))
+    assert websearch.navigation_page('https://x.go.id/peraturan',hub,hub.result()[1])
+    article=websearch.PageParser();article.feed('<p>'+'Isi peraturan tentang tenaga kerja asing. '*40+'</p><a href="/x">x</a>')
+    assert not websearch.navigation_page('https://x.go.id/peraturan/detail/1',article,article.result()[1])
+    def site(url,base,robots=None,relaxed=False,**kw):
+        if url.endswith('robots.txt'):return url,'',b'','text/plain'
+        if url.endswith('.xml'):raise websearch.HttpStatus(404)
+        if url=='https://source.example/':
+            html='<title>Beranda</title>'+''.join(f'<a href="/detail/{i}">Berita {i}</a>' for i in range(3))
+        else:
+            html='<title>原料供应通报</title><p>港口设备故障导致原料延迟七天，库存仅能维持三天生产。'+url+'</p>'
+        return url,html,html.encode(),'text/html'
+    monkeypatch.setattr(websearch,'fetch_page',site);monkeypatch.setattr(websearch.model,'call_model',fake_model)
+    run=process(web_client,add_source(web_client,url='https://source.example/',max_pages=4))
+    assert run['status']=='completed' and len(run['items'])==3 and all('/detail/' in p['url'] for p in run['items'])
+    only_home=process(web_client,add_source(web_client,url='https://source.example/',max_pages=1))
+    assert only_home['status']=='completed' and [p['url'] for p in only_home['items']]==['https://source.example/']
+
+def test_changed_review_standard_does_not_reuse_old_verdicts(web_client,monkeypatch):
+    calls=[]
+    async def counting(settings,payload,system=None):
+        calls.append(1);return await fake_model(settings,payload,system)
+    monkeypatch.setattr(websearch,'fetch_page',fake_fetch);monkeypatch.setattr(websearch.model,'call_model',counting)
+    c=web_client;sid=add_source(c)
+    process(c,sid);monkeypatch.setattr(websearch,'REVIEW_VERSION',websearch.REVIEW_VERSION+1);process(c,sid)
+    assert len(calls)==2
