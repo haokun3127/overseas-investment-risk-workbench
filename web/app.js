@@ -24,20 +24,12 @@ async function api(path, options={}){
 }
 function badge(value){return `<span class="badge ${esc(value)}">${esc(levels[value]||statuses[value]||value||'未分析')}</span>`;}
 
-function presentationData(value,inherited=false){
-  if(Array.isArray(value))return value.map(v=>presentationData(v,inherited));
-  if(!value||typeof value!=='object')return value;
-  const demo=inherited||value.demo===true||value.demo===1||value.mode==='demo'||/^demo-/.test(value.version||'');
-  const result={};
-  for(const [key,item] of Object.entries(value)){
-    if(typeof item==='string'&&demo&&['title','source','body','text','quote','summary','impact','reason','model','notes','locator'].includes(key)){
-      result[key]=item.replace(/^正文字符 \d+–\d+$/,'正文').replace(/^示例[：:]\s*/,'').replace(/【虚构演示资料】/g,'').replace(/演示案例描述/g,'资料显示').replace(/此项为演示推断。/g,'此项为潜在影响推断。').replace(/内置虚构案例 · 非真实新闻|合成API演示 · 非真实新闻/g,'业务资料').replace(/内置展示样例/g,'业务记录').replace(/仅用于虚构资料的功能演示，非甲方正式规则；正式分析前须替换并确认业务标准。/g,'可根据公司的行业、投资地区和经营情况调整风险分类与分级标准。').replace(/仅用于展示引用与原文追溯交互，不构成真实风险判断。/g,'原文记录支持该事件判断，可结合业务情况复核。').replace(/虚构演示结果，未调用模型。/g,'已保存的风险研判记录。');
-    }else result[key]=presentationData(item,demo);
-  }
-  return result;
-}
+// Demo records are shown as they are, labelled, so they are never mistaken for real business data.
+function presentationData(value){return value;}
 
-function demoTag(){return '';}
+// Analysis is refused until the client's classification rules are confirmed: say so where work starts.
+function rulesAlert(){return state.config?.rules?.confirmed?'':'<div class="setup-alert" role="alert"><div><strong>风险分类分级规则尚未确认</strong><span>规则经甲方确认前，所有风险分析都无法启动，网站检索结果也不能“保存后分析”。资料导入、网站检索和知识库不受影响。</span></div><a class="primary small" href="#settings">去确认规则</a></div>';}
+function demoTag(demo){return demo?'<span class="badge demo-tag" title="内置虚构演示数据，不是真实风险">演示</span>':'';}
 function when(date){return date?new Date(date).toLocaleString('zh-CN',{hour12:false}):'—';}
 function errorBox(message){return `<div class="error" role="alert">${esc(message)}</div>`;}
 function icon(name){return `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;}
@@ -66,7 +58,7 @@ function categoryNetwork(stats){
 function sourceButton(id,label='查看原文',quote=''){return `<button class="text-button source-action" data-source="${id}" data-quote="${esc(quote)}">${icon('source')}${label}</button>`;}
 function empty(title,description,actions=''){return `<div class="empty"><span class="empty-symbol" aria-hidden="true">${icon('documents')}</span><h2>${title}</h2><p>${description}</p><div class="actions">${actions}</div></div>`;}
 function scope(){return `<div class="scope-bar"><span class="muted">新分析背景：印度尼西亚 · ${esc(state.company?.name||'未选择公司')} · ${esc(state.company?.industry||'行业待补充')}</span></div>`;}
-function demonstration(){return '';}
+function demonstration(){return '<p class="demo-note" role="note">当前结果包含标有“演示”的内置虚构数据，不是真实风险。风险简报默认不纳入演示数据；不再需要时可在<a href="#settings">模型与规则</a>中一键清除。</p>';}
 function pagination(data){return `<div class="pagination"><span>共 ${data.total} 条 · 第 ${data.page} / ${Math.max(1,Math.ceil(data.total/data.page_size))} 页</span><div class="actions"><button class="secondary small" data-page="${data.page-1}" ${data.page<=1?'disabled':''}>上一页</button><button class="secondary small" data-page="${data.page+1}" ${data.page*data.page_size>=data.total?'disabled':''}>下一页</button></div></div>`;}
 function tableEvents(items,compact=false){return `<div class="table-wrap"><table><thead><tr><th>风险事件</th><th>等级</th>${compact?'':'<th>风险类型</th>'}<th>复核状态</th><th>资料日期</th></tr></thead><tbody>${items.map(e=>`<tr><td class="title-cell"><a class="event-link" href="#event/${e.id}">${esc(e.title)}</a>${demoTag(e.demo)}<span class="source-line">${esc(e.source||'来源未填写')}</span></td><td>${badge(e.level)}</td>${compact?'':`<td class="nowrap">${esc(e.category)}</td>`}<td>${badge(e.review_status)}</td><td class="nowrap">${esc(e.date||'未注明')}</td></tr>`).join('')}</tbody></table></div>`;}
 async function boot(){
@@ -126,7 +118,7 @@ async function render(){
     else html=empty('页面不存在','请从左侧导航选择工作区。','<a href="#overview" class="primary">返回总览</a>');
     if(renderId!==state.renderId)return;
     html=await enhanceView(route,html);
-    if(route==='overview'){const host=document.createElement('div');host.innerHTML=html;host.querySelector('.page-heading').insertAdjacentHTML('afterend',companyPanel());html=host.innerHTML;}
+    if(route==='overview'){const host=document.createElement('div');host.innerHTML=html;host.querySelector('.page-heading').insertAdjacentHTML('afterend',rulesAlert()+companyPanel());html=host.innerHTML;}
     if(renderId!==state.renderId)return;
     $('#main').innerHTML=`<div class="route-enter">${composeWorkspace(route,html)}</div>`;bind();bindFeatures();bindWorkflows();bindWorkspace();bindWebsite();bindCompanies();
   }catch(e){if(renderId===state.renderId)$('#main').innerHTML=errorBox(e.message)+'<button class="secondary" id="retry-page">重新加载</button>';$('#retry-page')?.addEventListener('click',render);}
@@ -164,7 +156,7 @@ async function documents(knowledge){
   const data=await api('/documents?'+new URLSearchParams({...state.filter,kind,page:state.page}));
   return heading(knowledge?'知识库':'资料与导入',knowledge?'保存政策、案例与业务资料，为风险分析提供可追溯的参考依据。':'先保存原始资料，再选择需要分析的内容。')+
     `<div class="split"><section class="panel"><div class="panel-heading"><h2>${knowledge?'添加参考资料':'导入待分析资料'}</h2></div><div class="panel-content">${importForm(knowledge)}</div></section><section class="panel"><div class="panel-heading"><h2>${knowledge?'检索与使用说明':'导入说明'}</h2></div><div class="panel-content form-note">${knowledge?'<p>知识库使用服务端文本检索，无需部署大模型或接入向量 API。引用片段随分析版本保存。</p><p>API 分析仅使用已授权的参考资料。</p><form id="knowledge-search"><label class="field">试查知识库<input name="q" required placeholder="输入关键词或业务问题"></label><button class="secondary small" type="submit">检索资料</button></form>':'<ul><li>每条记录至少包含标题和正文。</li><li>CSV / Excel 使用模板列名；逐行报告成功、重复和失败结果。</li><li>PDF 需含可提取文本；扫描件请先 OCR。</li><li>单条正文最多60000字符，超长资料请按章节拆分。</li><li>文件保存成功后，在下方资料列表启动分析。</li></ul>'}<p>模型状态：<strong>${modelStatusText()}</strong><br>分类规则：${state.config.rules.confirmed?'已确认':'待甲方确认'}</p><a href="#settings">查看模型与规则设置</a></div></section></div><div id="knowledge-results"></div>`+
-    `<section class="panel"><div class="panel-heading"><h2>${knowledge?'参考资料':'资料列表'} <small>${data.total} 条</small></h2>${knowledge?'':'<button class="primary small" id="analyze-selected">分析所选资料</button>'}</div><form class="filters" id="document-filter"><label class="search-field">搜索资料<input name="q" value="${esc(state.filter.q||'')}" placeholder="按标题搜索"></label><button class="secondary small">查询</button></form>${data.items.length?`<div class="table-wrap"><table><thead><tr>${knowledge?'':'<th><input type="checkbox" id="select-all" aria-label="选择当前页可分析资料"></th>'}<th>资料标题</th><th>日期</th><th>${knowledge?'文本长度':'分析状态'}</th><th>数据范围</th><th>操作</th></tr></thead><tbody>${data.items.map(d=>`<tr>${knowledge?'':`<td><input type="checkbox" name="doc-select" value="${d.id}" aria-label="选择 ${esc(d.title)}" ${d.demo?'disabled title="已归档资料；导入新资料后可分析"':''}></td>`}<td class="title-cell">${esc(d.title)}${demoTag(d.demo)}<span class="source-line">${esc(d.source||'来源未填写')}</span></td><td class="nowrap">${esc(d.date||'未注明')}</td><td>${knowledge?`${d.characters} 字符`:badge(['queued','running','failed'].includes(d.job_status)?d.job_status:(d.decision||d.job_status))}</td><td class="nowrap">${d.allow_external?'允许外部分析':'未授权 AI 使用'}</td><td><div class="document-actions">${sourceButton(d.id)}${knowledge||d.demo?'':`<button class="secondary small" data-analyze="${d.id}">${d.decision?'重新分析':'分析'}</button>`}</div></td></tr>`).join('')}</tbody></table></div>`:empty(knowledge?'知识库还没有资料':'暂无待分析资料',knowledge?'导入甲方提供的政策法规或案例后，可以先检索检查内容。':'在上方上传文件或手动录入，原始内容会保存在本地。')}${pagination(data)}</section>`;
+    `<section class="panel"><div class="panel-heading"><h2>${knowledge?'参考资料':'资料列表'} <small>${data.total} 条</small></h2>${knowledge?'':'<button class="primary small" id="analyze-selected">分析所选资料</button>'}</div><form class="filters" id="document-filter"><label class="search-field">搜索资料<input name="q" value="${esc(state.filter.q||'')}" placeholder="按标题搜索"></label><button class="secondary small">查询</button></form>${data.items.length?`<div class="table-wrap"><table><thead><tr>${knowledge?'':'<th><input type="checkbox" id="select-all" aria-label="选择当前页可分析资料"></th>'}<th>资料标题</th><th>日期</th><th>${knowledge?'文本长度':'分析状态'}</th><th>数据范围</th><th>操作</th></tr></thead><tbody>${data.items.map(d=>`<tr>${knowledge?'':`<td><input type="checkbox" name="doc-select" value="${d.id}" aria-label="选择 ${esc(d.title)}" ${d.demo?'disabled title="已归档资料；导入新资料后可分析"':''}></td>`}<td class="title-cell">${esc(d.title)}${demoTag(d.demo)}<span class="source-line">${esc(d.source||'来源未填写')}</span></td><td class="nowrap">${esc(d.date||'未注明')}</td><td>${knowledge?`${d.characters} 字符`:badge(['queued','running','failed'].includes(d.job_status)?d.job_status:(d.decision||d.job_status))}</td><td class="nowrap">${d.allow_external?'允许外部分析':'未授权 AI 使用'}</td><td><div class="document-actions">${sourceButton(d.id)}<button class="text-button danger" data-delete-doc="${d.id}" data-title="${esc(d.title)}">删除</button>${knowledge||d.demo?'':`<button class="secondary small" data-analyze="${d.id}">${d.decision?'重新分析':'分析'}</button>`}</div></td></tr>`).join('')}</tbody></table></div>`:empty(knowledge?'知识库还没有资料':'暂无待分析资料',knowledge?'导入甲方提供的政策法规或案例后，可以先检索检查内容。':'在上方上传文件或手动录入，原始内容会保存在本地。')}${pagination(data)}</section>`;
 }
 async function jobs(){
   const data=await api('/jobs');
@@ -207,6 +199,8 @@ function bind(){
   $$('[data-page]').forEach(b=>b.onclick=()=>{state.page=Number(b.dataset.page);navigateList();});
   $$('[data-source]').forEach(b=>b.onclick=()=>showSource(b.dataset.source,b.dataset.quote));
   $$('[data-analyze]').forEach(b=>b.onclick=()=>analyze([Number(b.dataset.analyze)],b));
+  $$('[data-delete-doc]').forEach(b=>b.onclick=async()=>{if(!confirm(`删除资料“${b.dataset.title}”？
+它的文本片段、中文摘要、分析结果和风险事件会一并删除，无法恢复。`))return;b.disabled=true;try{const r=await api('/documents/'+b.dataset.deleteDoc,{method:'DELETE'});toast(r.events?`已删除资料及 ${r.events} 条风险事件`:'资料已删除');await render();}catch(e){toast(e.message);b.disabled=false;}});
   $$('[data-refresh]').forEach(b=>b.onclick=render);
   $$('[data-demo]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{const d=await api('/demo',{method:'POST'});toast(`已载入 ${d.added} 条业务案例`);await render();}catch(e){toast(e.message);b.disabled=false;}});
   $('#event-filter')?.addEventListener('submit',e=>{e.preventDefault();state.filter=Object.fromEntries(new FormData(e.currentTarget));state.page=1;openEvents(state.filter);});

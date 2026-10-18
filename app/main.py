@@ -414,6 +414,21 @@ def create_app(settings=None, run_worker=True):
     @app.post('/api/demo')
     def demo(): return {'added':seed(store)}
 
+    @app.delete('/api/demo')
+    def clear_demo():
+        ids=[r['id'] for r in store.rows('SELECT id FROM documents WHERE demo=1')]
+        result=store.delete_documents(ids)
+        store.audit('demo_cleared',f"count={result['documents']}, events={result['events']}")
+        return result
+
+    @app.delete('/api/documents/{doc_id}')
+    def delete_document(doc_id:int):
+        doc=store.one('SELECT id,title,kind FROM documents WHERE id=?',(doc_id,))
+        if not doc: raise HTTPException(404,'资料不存在。')
+        result=store.delete_documents([doc_id])
+        store.audit('document_deleted',f"id={doc_id}, kind={doc['kind']}, events={result['events']}")
+        return result
+
     @app.get('/api/export/events')
     def export_events(q:str='',level:str='',category:str='',review:str='',demo:str='all',date_from:str='',date_to:str=''):
         base,args=events_query(demo,q,level,category,review,date_from,date_to)

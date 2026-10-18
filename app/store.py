@@ -60,6 +60,38 @@ class Store:
             db.execute('INSERT OR IGNORE INTO settings VALUES (?,?)', ('rules', json.dumps(DEFAULT_RULES, ensure_ascii=False)))
             db.execute("UPDATE jobs SET status='failed', error='服务重启中断了任务，请重试。', finished_at=? WHERE status='running'", (now(),))
 
+    def delete_documents(self, ids):
+        """Remove documents with everything derived from them (chunks, jobs, analyses, events and review
+        history); companies and website pages that point at them are unlinked. Returns deleted counts."""
+        ids = list(dict.fromkeys(int(i) for i in ids))
+        if not ids: return {'documents': 0, 'events': 0}
+        marks = ','.join('?' * len(ids))
+        with self.db() as db:
+            if db.execute(f"SELECT 1 FROM jobs WHERE document_id IN ({marks}) AND status IN ('queued','running') LIMIT 1", ids).fetchone():
+                raise ValueError('资料正在分析，请等待任务结束或取消后再删除。')
+            tables = {r['name'] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            files = [r['file_path'] for r in db.execute(f'SELECT file_path FROM documents WHERE id IN ({marks})', ids) if r['file_path']]
+            analyses = f'SELECT id FROM analyses WHERE document_id IN ({marks})'
+            events = db.execute(f'SELECT COUNT(*) n FROM events WHERE analysis_id IN ({analyses})', ids).fetchone()['n']
+            db.execute(f'DELETE FROM review_history WHERE event_id IN (SELECT id FROM events WHERE analysis_id IN ({analyses}))', ids)
+            db.execute(f'DELETE FROM events WHERE analysis_id IN ({analyses})', ids)
+            db.execute(f'DELETE FROM analyses WHERE document_id IN ({marks})', ids)
+            db.execute(f'DELETE FROM jobs WHERE document_id IN ({marks})', ids)
+            db.execute(f'DELETE FROM chunks WHERE document_id IN ({marks})', ids)
+            if 'companies' in tables: db.execute(f'UPDATE companies SET document_id=NULL WHERE document_id IN ({marks})', ids)
+            if 'web_pages' in tables:
+                for page in db.execute("SELECT id,imports_json FROM web_pages WHERE imports_json!='{}'").fetchall():
+                    imports = json.loads(page['imports_json']); kept = {k: v for k, v in imports.items() if v not in ids}
+                    if kept != imports: db.execute('UPDATE web_pages SET imports_json=? WHERE id=?', (json.dumps(kept), page['id']))
+            deleted = db.execute(f'DELETE FROM documents WHERE id IN ({marks})', ids).rowcount
+            # Attachments are removed only when nothing else (another document, a website snapshot) still uses them.
+            orphans = [f for f in files if not db.execute('SELECT 1 FROM documents WHERE file_path=? LIMIT 1', (f,)).fetchone()
+                       and not ('web_pages' in tables and db.execute('SELECT 1 FROM web_pages WHERE snapshot=? LIMIT 1', (f,)).fetchone())]
+        for name in orphans:
+            path = self.directory / 'uploads' / name
+            if path.parent == self.directory / 'uploads' and path.is_file(): path.unlink()
+        return {'documents': deleted, 'events': events}
+
     @contextmanager
     def db(self):
         db = sqlite3.connect(self.path, timeout=15)
