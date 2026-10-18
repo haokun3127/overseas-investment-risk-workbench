@@ -11,6 +11,7 @@ import re
 import socket
 import ssl
 import time
+import zlib
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
@@ -23,7 +24,9 @@ from .ingest import insert_document
 from .store import now
 
 AGENT = 'RiskWorkbenchBot'
-USER_AGENT = 'Mozilla/5.0 (compatible; RiskWorkbenchBot/1.1)'
+USER_AGENT = 'RiskWorkbenchBot/1.1'
+COMPAT_AGENT = 'Mozilla/5.0 (compatible; RiskWorkbenchBot/1.1)'
+PROXY_ONLY_HOSTS = ('archive.org', 'web.archive.org')  # blocked from mainland China; local DNS answers are poisoned
 MAX_BYTES = 1024 * 1024
 MAX_PDF_BYTES = 15 * 1024 * 1024
 MAX_BODY = 60000
@@ -106,6 +109,9 @@ class PinnedConnection(http.client.HTTPConnection):
         if self.tls:
             self.sock=ssl.create_default_context().wrap_socket(self.sock,server_hostname=self.host)
 
+class Disallowed(ValueError):
+    pass
+
 class HttpStatus(ValueError):
     def __init__(self,status):
         super().__init__('网站返回 HTTP '+str(status)+'。');self.status=status
@@ -118,27 +124,46 @@ HEADERS={'User-Agent':USER_AGENT,'Accept':'text/html,application/xhtml+xml,appli
          'Accept-Language':'id,en;q=0.9,zh-CN;q=0.8','Accept-Encoding':'identity'}
 
 def open_response(u,port):
-    """Direct first; on unresolvable DNS, connection failure or HTTP 403, retry once via FETCH_PROXY."""
+    """Direct with the plain bot UA; on 403 again with a browser-compatible UA (some WAFs accept only one of
+    the two); on DNS/connection failure or a remaining 403, once more via FETCH_PROXY."""
     path=urlunsplit(('','',u.path,u.query,''))
-    def attempt(proxy):
-        try: ip=public_address(u.hostname,port)
-        except Unresolved:
-            if not proxy: raise
-            ip=None
+    def attempt(proxy,agent=USER_AGENT):
+        if proxy and u.hostname in PROXY_ONLY_HOSTS: ip=None
+        else:
+            try: ip=public_address(u.hostname,port)
+            except Unresolved:
+                if not proxy: raise
+                ip=None
         c=PinnedConnection(u.hostname,port,ip,u.scheme=='https',proxy)
         try:
-            c.request('GET',path,headers=HEADERS);return c,c.getresponse()
+            c.request('GET',path,headers=dict(HEADERS,**{'User-Agent':agent}));return c,c.getresponse()
         except BaseException:
             c.close();raise
-    try: c,r=attempt(None)
-    except (Unresolved,OSError,http.client.HTTPException):
+    failures=(Unresolved,OSError,http.client.HTTPException)
+    if FETCH_PROXY and u.hostname in PROXY_ONLY_HOSTS: return attempt(FETCH_PROXY)
+    try:
+        c,r=attempt(None)
+        if r.status==403:
+            c.close();c,r=attempt(None,COMPAT_AGENT)
+    except failures:
         if not FETCH_PROXY: raise
         return attempt(FETCH_PROXY)
     if r.status!=403 or not FETCH_PROXY: return c,r
     c.close()
     try: return attempt(FETCH_PROXY)
-    except (Unresolved,OSError,http.client.HTTPException):
+    except failures:
         raise ValueError('网站返回 HTTP 403，经备用出口重试也失败。')
+
+def read_body(r,limit):
+    """Up to limit bytes of the decoded body. Servers (and raw archive captures) may still send gzip/deflate."""
+    encoding=r.getheader('Content-Encoding','identity').lower().strip()
+    if encoding in ('','identity'): return r.read(limit)
+    if encoding not in ('gzip','x-gzip','deflate'): raise ValueError('暂不支持该压缩格式：'+encoding)
+    data=r.read(MAX_PDF_BYTES)
+    for wbits in ((zlib.MAX_WBITS|32,) if 'gzip' in encoding else (zlib.MAX_WBITS,-zlib.MAX_WBITS)):
+        try: return zlib.decompressobj(wbits).decompress(data,limit)
+        except zlib.error: continue
+    raise ValueError('压缩网页无法解码。')
 
 def pdf_text(raw):
     try:
@@ -161,7 +186,7 @@ def fetch_page(url,base,robots=None,relaxed=False):
     for _ in range(5):
         url=clean_url(url)
         if not relaxed and not in_scope(url,base): raise OutOfScope(url)
-        if robots is not None and not robots.can_fetch(url):raise ValueError('robots.txt 不允许采集此页。')
+        if robots is not None and not robots.can_fetch(url):raise Disallowed('robots.txt 不允许采集此页。')
         u=urlsplit(url);port=u.port or (443 if u.scheme=='https' else 80)
         try: c,r=open_response(u,port)
         except (OSError,http.client.HTTPException) as error:
@@ -172,16 +197,15 @@ def fetch_page(url,base,robots=None,relaxed=False):
                 if not target: raise ValueError('网站启用了访问验证（重定向缺少目标）。')
                 url=urljoin(url,target);continue
             if r.status!=200: raise HttpStatus(r.status)
-            if r.getheader('Content-Encoding','identity').lower()!='identity': raise ValueError('暂不支持压缩网页响应。')
             content_type=r.getheader('Content-Type','')
             kind=content_type.lower()
             if 'application/pdf' in kind or ('octet-stream' in kind and re.search(r'\.pdf$',u.path,re.I)):
-                raw=r.read(MAX_PDF_BYTES+1)
+                raw=read_body(r,MAX_PDF_BYTES+1)
                 if len(raw)>MAX_PDF_BYTES: raise ValueError('PDF 超过15MB采集限制。')
                 return url,pdf_text(raw),raw,'application/pdf'
             if not relaxed and not any(t in kind for t in ('text/html','text/plain','application/xhtml+xml')):
                 raise ValueError('当前仅采集 HTML、文本或 PDF 页面。')
-            raw=r.read(MAX_BYTES)  # longer pages are truncated, not rejected
+            raw=read_body(r,MAX_BYTES)  # longer pages are truncated, not rejected
             charset=re.search(r'charset\s*=\s*["\']?([\w-]+)',content_type,re.I)
             if not charset: charset=re.search(br'charset\s*=\s*["\']?([\w-]+)',raw[:4096],re.I)
             encoding=charset.group(1) if charset else 'utf-8'
@@ -408,7 +432,7 @@ class Collector:
                 if url in seen:continue
                 seen.add(url)
                 try:
-                    if not robots.can_fetch(url): raise ValueError('robots.txt 不允许采集此页。')
+                    if not robots.can_fetch(url): raise Disallowed('robots.txt 不允许采集此页。')
                     archived=''
                     try:
                         if not live: raise ValueError(live_error)
@@ -419,13 +443,13 @@ class Collector:
                         if url!=base or rebased>=2: raise
                         rebased+=1;moved_root=site_root(moved.target)!=site_root(base);base=moved.target
                         if moved_root: robots=await asyncio.to_thread(load_robots,site_root(base))
-                        pending.insert(0,base);continue
+                        seen.discard(url);pending.insert(0,base);continue
                     except ValueError as error:
-                        if not ARCHIVE_FALLBACK or 'robots.txt' in str(error) or (isinstance(error,HttpStatus) and error.status in (404,410)): raise
+                        if not ARCHIVE_FALLBACK or isinstance(error,Disallowed) or (isinstance(error,HttpStatus) and error.status in (404,410)): raise
                         try: archived,text,raw,ctype=await asyncio.to_thread(archived_page,url)
                         except ValueError as inner: raise ValueError(str(error)+'；网页存档：'+str(inner))
                         final=url
-                    if not robots.can_fetch(final): raise ValueError('robots.txt 不允许采集跳转后的页面。')
+                    if not robots.can_fetch(final): raise Disallowed('robots.txt 不允许采集跳转后的页面。')
                     parser=PageParser()
                     if 'html' in ctype.lower(): parser.feed(text);title,body=parser.result()
                     else: title,body=unquote(Path(urlsplit(final).path).name) or final,text

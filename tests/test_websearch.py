@@ -208,10 +208,13 @@ def test_fallback_proxy_only_after_direct_failure(monkeypatch):
     with pytest.raises(ValueError,match='网页连接失败'):websearch.fetch_page(url,url)
     assert calls==[('8.8.8.8',None)]
     monkeypatch.setattr(websearch,'FETCH_PROXY',('127.0.0.1',7890))
-    for direct in ('refused',403):
-        calls=fallback_harness(monkeypatch,direct)
-        assert websearch.fetch_page(url,url)[1].endswith('hello')
-        assert calls==[('8.8.8.8',None),('8.8.8.8',('127.0.0.1',7890))]
+    calls=fallback_harness(monkeypatch,'refused')
+    assert websearch.fetch_page(url,url)[1].endswith('hello')
+    assert calls==[('8.8.8.8',None),('8.8.8.8',('127.0.0.1',7890))]
+    # 403: once more directly with the browser-compatible UA, then via the proxy.
+    calls=fallback_harness(monkeypatch,403)
+    assert websearch.fetch_page(url,url)[1].endswith('hello')
+    assert calls==[('8.8.8.8',None),('8.8.8.8',None),('8.8.8.8',('127.0.0.1',7890))]
     calls=fallback_harness(monkeypatch,200)
     websearch.fetch_page(url,url)
     assert calls==[('8.8.8.8',None)]
@@ -310,3 +313,42 @@ def test_link_ranking_prefers_detail_pages_and_skips_login():
     assert websearch.SKIP_LINK.search('https://ojk.go.id/_layouts/15/Authenticate.aspx?Source=x')
     assert websearch.SKIP_LINK.search('https://x.go.id/masuk')
     assert websearch.link_score('https://x.go.id/peraturan/pp-36-2021.pdf','PP Pengupahan',terms)>websearch.link_score('https://x.go.id/kontak','Kontak',terms)
+
+def test_compressed_bodies_and_archive_hosts_skip_local_dns(monkeypatch):
+    import gzip
+    class Response:
+        status=200
+        def __init__(self):self.data=gzip.compress(b'<title>t</title>'+b'x'*5000)
+        def getheader(self,name,default=None):return {'Content-Type':'text/html','Content-Encoding':'gzip'}.get(name,default)
+        def read(self,size):return self.data[:size]
+    assert websearch.read_body(Response(),100)==b'<title>t</title>'+b'x'*84
+    seen=[]
+    class Connection:
+        def __init__(self,host,port,ip,tls,proxy=None):seen.append((host,ip,proxy))
+        def request(self,*a,**kw):pass
+        def getresponse(self):
+            r=Response();r.data=gzip.compress(b'{"archived_snapshots":{}}');return r
+        def close(self):pass
+    def poisoned(*a,**kw):raise AssertionError('archive hosts must not use local DNS')
+    monkeypatch.setattr(websearch,'PinnedConnection',Connection);monkeypatch.setattr(socket,'getaddrinfo',poisoned)
+    monkeypatch.setattr(websearch,'FETCH_PROXY',('127.0.0.1',7890))
+    with pytest.raises(ValueError,match='没有可用快照'):websearch.archived_page('https://kppu.go.id/')
+    assert seen==[('archive.org',None,('127.0.0.1',7890))]
+
+def test_unreachable_robots_uses_archive_and_rebase_keeps_page_budget(web_client,monkeypatch):
+    monkeypatch.setattr(websearch,'ARCHIVE_FALLBACK',True)
+    def down(url,base,robots=None,relaxed=False):raise ValueError('网页连接失败：SSLEOFError')
+    def archive(url):
+        html='<title>原料供应通报</title><p>港口设备故障导致原料延迟七天，库存仅能维持三天。</p>'
+        return '2026-04-15',html,html.encode(),'text/html'
+    monkeypatch.setattr(websearch,'fetch_page',down);monkeypatch.setattr(websearch,'archived_page',archive)
+    monkeypatch.setattr(websearch.model,'call_model',fake_model)
+    run=process(web_client,add_source(web_client,max_pages=1))
+    assert run['status']=='completed' and run['items'][0]['title'].startswith('［网页存档 2026-04-15］')
+    def moved(url,base,robots=None,relaxed=False):
+        if url.endswith('robots.txt'):raise websearch.HttpStatus(404)
+        if url=='https://source.example/news/':raise websearch.OutOfScope('https://source.example/id/news/')
+        return fake_fetch(url,base)
+    monkeypatch.setattr(websearch,'fetch_page',moved)
+    run=process(web_client,add_source(web_client,max_pages=1))
+    assert run['status']=='completed' and run['items'][0]['url']=='https://source.example/id/news/'
