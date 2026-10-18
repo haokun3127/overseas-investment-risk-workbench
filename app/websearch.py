@@ -329,7 +329,7 @@ def review_window(body,keywords,size=6000):
 def xml_text(value):
     return html_text(re.sub(r'<!\[CDATA\[(.*?)\]\]>',lambda m:m.group(1),value or '',flags=re.S))
 
-def feed_pages(base,robots,max_pages):
+def feed_pages(base,robots,max_pages,terms=()):
     """RSS/Atom items of a site whose pages are blocked but whose feed is not (WordPress /feed/ etc.)."""
     root=site_root(base)
     for path in ('feed/','rss','rss.xml','feed.xml','atom.xml'):
@@ -338,19 +338,31 @@ def feed_pages(base,robots,max_pages):
         try: _,text,raw,_=fetch_page(url,url,relaxed=True,limit=3*MAX_BYTES)
         except ValueError: continue
         if not re.search(r'<(rss|feed)[\s>]',text[:3000]): continue
-        items=[]
-        for block in re.findall(r'<(?:item|entry)[\s>].*?</(?:item|entry)>',text,re.S)[:max_pages]:
+        entries=[]
+        for block in re.findall(r'<(?:item|entry)[\s>].*?</(?:item|entry)>',text,re.S)[:500]:
             def tag(name):
                 m=re.search(r'<'+name+r'(?:\s[^>]*)?>(.*?)</'+name+'>',block,re.S);return m.group(1).strip() if m else ''
             link=tag('link') or (re.search(r'<link[^>]+href="([^"]+)"',block) or [None,''])[1]
-            body=xml_text(tag('content:encoded') or tag('content') or tag('description') or tag('summary'))
-            title=xml_text(tag('title'))
-            if not link or len(body.strip())<20: continue
             try: link=clean_url(urljoin(root,link.strip()))
             except ValueError: continue
             if urlsplit(link).hostname!=urlsplit(base).hostname or not robots.can_fetch(link): continue
-            date=tag('pubDate') or tag('published') or tag('updated')
-            items.append((link,'［RSS］'+(title or link),body,date[:40],block.encode(),'text/xml'))
+            entries.append((link,xml_text(tag('title')),xml_text(tag('content:encoded') or tag('content') or tag('description') or tag('summary')),
+                            (tag('pubDate') or tag('published') or tag('updated'))[:40],block.encode()))
+        # Keyword matches in the title first; otherwise the feed's own (newest first) order.
+        entries.sort(key=lambda e:-link_score(e[0],e[1],terms))
+        items=[]
+        for link,title,body,date,raw in entries:
+            if len(items)>=max_pages: break
+            ctype='text/xml'
+            if len(body.strip())<200:
+                # Feed only lists the document (e.g. agreement PDFs): read the linked file itself.
+                try:
+                    _,full,raw,kind=fetch_page(link,root,robots)
+                    if 'html' in kind.lower(): full=html_text(full)
+                    if len(full.strip())>len(body.strip()): body,ctype=full,('application/pdf' if kind=='application/pdf' else 'text/html')
+                except ValueError: pass
+            if len(body.strip())<20: continue
+            items.append((link,'［RSS］'+(title or link),body,date,raw,ctype))
         if items: return items
     return []
 
@@ -801,7 +813,7 @@ class Collector:
                 await asyncio.sleep(delay)
             if not pages and not connector and robots.can_fetch(base):
                 # Pages blocked but the site's RSS/Atom feed open (e.g. WordPress /feed/): use its items.
-                for item in await asyncio.to_thread(feed_pages,base,robots,source['max_pages']): self.keep(run_id,pages,*item)
+                for item in await asyncio.to_thread(feed_pages,base,robots,source['max_pages'],terms): self.keep(run_id,pages,*item)
             if not pages: raise ValueError('未采集到可检索正文，请查看逐页失败原因或更换入口。')
             usage=[];fresh=[p for p in pages if not p.get('reused')]
             for start in range(0,len(fresh),4):

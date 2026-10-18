@@ -516,3 +516,13 @@ def test_feed_fallback_sitemaps_uflpa_and_archived_render(web_client,monkeypatch
     run=process(web_client,add_source(web_client,max_pages=1))
     assert run['status']=='completed' and asked==['https://web.archive.org/web/20260415if_/https://source.example/news/']
     assert run['items'][0]['title']=='［网页存档 2026-04-15］法律部' and run['items'][0]['url']=='https://source.example/news/'
+
+def test_feed_items_without_text_read_the_linked_document(monkeypatch):
+    feed='<rss><channel><item><title>Other notice</title><link>https://source.example/media/a.pdf</link><description><![CDATA[No description]]></description></item><item><title>ASEAN Investment Agreement 港口</title><link>https://source.example/media/b.pdf</link><description><![CDATA[No description]]></description></item></channel></rss>'
+    def fetch(url,base,robots=None,relaxed=False,**kw):
+        if url.endswith('/feed/'):return url,feed,feed.encode(),'application/rss+xml'
+        if url.endswith('.pdf'):return url,'[第1页]\nFull agreement text for '+url+' with enough words to keep.',b'%PDF','application/pdf'
+        raise websearch.HttpStatus(404)
+    monkeypatch.setattr(websearch,'fetch_page',fetch)
+    items=websearch.feed_pages('https://source.example/',websearch.Robots(),1,['港口'])
+    assert len(items)==1 and items[0][0]=='https://source.example/media/b.pdf' and items[0][5]=='application/pdf' and 'Full agreement' in items[0][2]
