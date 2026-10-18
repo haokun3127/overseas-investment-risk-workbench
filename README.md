@@ -99,6 +99,13 @@ MODEL_JSON_MODE=true
 
 恢复只允许写入不存在的新目录，检查 SQLite 完整性并清除旧会话。之后在 `.env` 设置 `DATA_DIR=C:/risk-restored` 并启动服务。`.env` 单独安全备份，不包含在数据备份中。
 
+Linux 服务器每日自动备份：在环境文件设置 `BACKUP_DIR`，安装 `scripts/rag-backup.service` 和 `scripts/rag-backup.timer`（每天 03:30 运行，执行 `scripts/backup-daily.sh`：在线备份数据库与附件、检查完整性、保留最近 14 份，`KEEP_DAYS` 可调）。“模型与规则 › 服务运行状态”显示最近一次备份时间。
+
+```bash
+sudo install -m 644 scripts/rag-backup.service scripts/rag-backup.timer /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now rag-backup.timer
+```
+
 ## Docker 交付方式
 
 ```bash
