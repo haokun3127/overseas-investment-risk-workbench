@@ -78,7 +78,7 @@ function composeWorkspace(route,html){
       const layout=document.createElement('div');layout.className='library-workbench';tools.before(layout);
       list.classList.add('library-list');tools.classList.add('library-tools');layout.append(list,tools);
       tools.querySelectorAll('li').forEach(li=>{li.textContent=li.textContent.replace('在下方资料列表启动分析','在资料列表选择内容并启动分析');});
-      const results=root.querySelector('#knowledge-results');if(results)list.after(results);
+      const results=root.querySelector('#knowledge-results');if(results&&!list.contains(results))list.after(results);
     }
   }
   refineComponents(root);

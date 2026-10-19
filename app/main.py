@@ -25,6 +25,7 @@ from .demo import seed
 from . import model
 from . import companies
 from .websearch import Collector, initialize as initialize_websearch, router as websearch_router
+from . import websearch
 
 class Credentials(BaseModel):
     password: str = Field(min_length=10,max_length=128)
@@ -172,7 +173,7 @@ def create_app(settings=None, run_worker=True):
         return {'configured':settings.configured,'mode':settings.model_mode,'model':settings.model_name,
                 'last_success':latest,
                 'base_url':settings.model_base_url,'wire_api':settings.model_wire_api,'reasoning_effort':settings.model_reasoning_effort,'store_responses':settings.model_store,'rules':store.setting('rules'),
-                'retrieval':'服务端 BM25 文本检索（中文双字词，无需部署模型）','prompt_version':'risk-evidence-v1'}
+                'retrieval':'服务端 BM25 文本检索：原文加入库时生成的中文摘要和关键词，外文资料可用中文检索','prompt_version':'risk-evidence-v1'}
 
     @app.put('/api/rules')
     async def rules(request:Request):
@@ -240,7 +241,7 @@ def create_app(settings=None, run_worker=True):
         return Response('\ufeff标题,时间,来源,正文,原始链接\r\n',media_type='text/csv',headers={'Content-Disposition':'attachment; filename="import-template.csv"'})
 
     @app.get('/api/documents')
-    def documents(kind:str='event',q:str='',page:int=1,status:str='',policy:str=''):
+    def documents(kind:str='event',q:str='',page:int=1,status:str='',policy:str='',sort:str=''):
         page=max(1,page)
         if kind not in ('event','knowledge'): raise ValueError('资料用途无效。')
         args=[kind,'%'+q+'%','%'+q+'%']
@@ -252,10 +253,11 @@ def create_app(settings=None, run_worker=True):
         elif status in ('queued','running','failed','completed'):
             where+=' AND (SELECT status FROM jobs j WHERE j.document_id=d.id ORDER BY j.id DESC LIMIT 1)=?'; args.append(status)
         count=store.one('SELECT COUNT(*) n FROM documents d WHERE '+where,args)['n']
-        rows=store.rows('''SELECT d.id,d.title,d.date,d.source,d.kind,d.allow_external,d.demo,d.created_at,length(d.body) characters,
+        order="d.date='',d.date DESC,d.id DESC" if sort=='date' else 'd.id DESC'
+        rows=store.rows('''SELECT d.id,d.title,d.date,d.source,d.kind,d.allow_external,d.demo,d.created_at,length(d.body) characters,d.zh_summary,d.zh_state,
             (SELECT status FROM jobs WHERE document_id=d.id ORDER BY id DESC LIMIT 1) job_status,
             (SELECT decision FROM analyses WHERE document_id=d.id ORDER BY version DESC LIMIT 1) decision
-            FROM documents d WHERE '''+where+' ORDER BY d.id DESC LIMIT 30 OFFSET ?',args+[(page-1)*30])
+            FROM documents d WHERE '''+where+' ORDER BY '+order+' LIMIT 30 OFFSET ?',args+[(page-1)*30])
         return {'items':rows,'total':count,'page':page,'page_size':30}
 
     @app.get('/api/documents/{doc_id}')
@@ -474,6 +476,12 @@ def create_app(settings=None, run_worker=True):
         except (OSError,ValueError,KeyError):created=None
         return {'created_at':created,'count':len(marks)}
 
+    def model_error():
+        """Most recent model failure seen by analysis jobs or website reviews, if any."""
+        rows=[r for r in (store.one("SELECT error,finished_at at FROM jobs WHERE status='failed' AND error!='' ORDER BY id DESC LIMIT 1"),
+                          store.one("SELECT error,finished_at at FROM web_runs WHERE error LIKE '%模型服务%' ORDER BY id DESC LIMIT 1")) if r and r['at']]
+        return max(rows,key=lambda r:r['at']) if rows else None
+
     @app.get('/api/runtime')
     def runtime():
         disk=shutil.disk_usage(store.directory)
@@ -482,7 +490,11 @@ def create_app(settings=None, run_worker=True):
                 'chunks':store.one('SELECT COUNT(*) n FROM chunks')['n'],
                 'analyses':store.one('SELECT COUNT(*) n FROM analyses')['n'],
                 'queue':store.rows('SELECT status,COUNT(*) count FROM jobs GROUP BY status'),
-                'worker_enabled':run_worker,'backup':last_backup(),'last_analysis':store.one('SELECT created_at,model,mode FROM analyses ORDER BY id DESC LIMIT 1')}
+                'worker_enabled':run_worker,'backup':last_backup(),
+                'fetch_proxy':bool(websearch.FETCH_PROXY),'renderer':bool(websearch.RENDERER),
+                'enrich_pending':store.one("SELECT COUNT(*) n FROM documents WHERE kind='knowledge' AND demo=0 AND allow_external=1 AND zh_state=''")['n'],
+                'enrich_failed':store.one("SELECT COUNT(*) n FROM documents WHERE kind='knowledge' AND zh_state='failed'")['n'],
+                'model_error':model_error(),'last_analysis':store.one('SELECT created_at,model,mode FROM analyses ORDER BY id DESC LIMIT 1')}
 
     app.mount('/static',StaticFiles(directory=ROOT/'web'),name='static')
     @app.get('/')

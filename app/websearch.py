@@ -625,7 +625,7 @@ ERROR_HINTS=(
     ('重定向次数过多','网站跳转循环（通常需要浏览器 Cookie），自动采集无法完成。'),
     ('PDF','PDF 无法提取文字（可能是扫描件或加密文件），请人工处理。'),
     ('1MB','网页过大，只保留了前一部分。'),
-    ('未采集到可检索正文','这次没有采集到正文，请展开下方的逐页原因查看具体情况。'),
+    ('未采集到可检索正文','这次没有采集到正文，各页面的具体原因见检索结果。'),
     ('AI 未给出','部分页面 AI 没有给出可核验的判定，未参与自动入库，可查看原文后人工处理。'),
     ('较长采集间隔','网站要求的采集间隔过长，请联系站点管理员或改用官方接口。'),
 )
@@ -664,6 +664,9 @@ class ToggleInput(BaseModel):
 class GroupRunInput(BaseModel):
     category: str = Field(max_length=60)
 
+class BatchInput(BaseModel):
+    batch: str = Field(min_length=1,max_length=120)
+
 class RunInput(BaseModel):
     source_id: int
 
@@ -683,13 +686,16 @@ def initialize(store):
         columns={row['name'] for row in db.execute('PRAGMA table_info(web_sources)')}
         for column,ddl in (('category',"TEXT NOT NULL DEFAULT ''"),('enabled','INTEGER NOT NULL DEFAULT 1'),('deleted_at','TEXT')):
             if column not in columns: db.execute('ALTER TABLE web_sources ADD COLUMN '+column+' '+ddl)
+        for table,column,ddl in (('web_pages','method',"TEXT NOT NULL DEFAULT ''"),('web_runs','stage',"TEXT NOT NULL DEFAULT ''")):
+            if column not in {row['name'] for row in db.execute(f'PRAGMA table_info({table})')}: db.execute(f'ALTER TABLE {table} ADD COLUMN {column} {ddl}')
         db.execute("UPDATE web_runs SET status='failed',error='服务重启，采集已中断，请重新检索。',finished_at=? WHERE status='running'",(now(),))
 
-def queue_run(store,source):
+def queue_run(store,source,batch=''):
     with store.db() as db:
         active=db.execute("SELECT id FROM web_runs WHERE source_id=? AND status IN ('queued','running')",(source['id'],)).fetchone()
         if active: return active['id']
-        run_id=db.execute('INSERT INTO web_runs(source_id,config_json,status,created_at) VALUES (?,?,?,?)',(source['id'],json.dumps(dict(source,review_version=REVIEW_VERSION),ensure_ascii=False),'queued',now())).lastrowid
+        # batch ties the runs of one group search together, for its progress and "cancel the rest".
+        run_id=db.execute('INSERT INTO web_runs(source_id,config_json,status,created_at) VALUES (?,?,?,?)',(source['id'],json.dumps(dict(source,review_version=REVIEW_VERSION,batch=batch),ensure_ascii=False),'queued',now())).lastrowid
         db.execute('UPDATE web_sources SET next_run=? WHERE id=?',(time.time()+max(1,source['interval_hours'])*3600,source['id']))
         return run_id
 
@@ -755,7 +761,7 @@ class Collector:
             if item['relevant'] and (len(quote)<6 or loose(quote) not in loose(snippets[item['id']])): continue
             verdicts[item['id']]=(item['relevant'],reason,quote)
         return verdicts
-    def keep(self,run_id,pages,url,title,body,date,raw,ctype):
+    def keep(self,run_id,pages,url,title,body,date,raw,ctype,method='direct'):
         """Store one page (immutable snapshot + text). False when its text duplicates a page already kept."""
         if len(body)>MAX_BODY: body=body[:MAX_BODY-len(TRUNCATED)]+TRUNCATED
         digest=hashlib.sha256(body.encode()).hexdigest()
@@ -765,7 +771,7 @@ class Collector:
         snapshot='web-'+str(run_id)+'-'+hashlib.sha256(url.encode()).hexdigest()[:12]+'-'+hashlib.sha256(raw).hexdigest()[:16]+ext
         (self.store.directory/'uploads'/snapshot).write_bytes(raw)
         with self.store.db() as db:
-            page_id=db.execute('INSERT INTO web_pages(run_id,url,title,body,date,fetched_at,digest,snapshot) VALUES (?,?,?,?,?,?,?,?)',(run_id,url,title[:230],body,normal_date(date),now(),digest,snapshot)).lastrowid
+            page_id=db.execute('INSERT INTO web_pages(run_id,url,title,body,date,fetched_at,digest,snapshot,method) VALUES (?,?,?,?,?,?,?,?,?)',(run_id,url,title[:230],body,normal_date(date),now(),digest,snapshot,method)).lastrowid
         page={'id':page_id,'title':title[:230],'body':body,'url':url,'digest':digest}
         # Same source, same keywords, byte-identical text already judged in an earlier run: reuse that verdict
         # instead of paying for the model again.
@@ -791,7 +797,7 @@ class Collector:
             elif connector:
                 # Official API instead of crawling (see api_connector); the review below is the same.
                 for item in await asyncio.to_thread(connector,base,source['keywords'],source['max_pages']):
-                    self.keep(run_id,pages,*item)
+                    self.keep(run_id,pages,*item,method='api')
                 with store.db() as db: db.execute('UPDATE web_runs SET progress=? WHERE id=?',(len(pages),run_id))
                 robots=Robots()
             else:
@@ -814,7 +820,7 @@ class Collector:
                 seen.add(url)
                 try:
                     if not robots.can_fetch(url): raise Disallowed('robots.txt 不允许采集此页。')
-                    archived=''
+                    archived='';how='direct'
                     try:
                         if not live: raise ValueError(live_error)
                         final,text,raw,ctype=await asyncio.to_thread(fetch_page,url,base,robots)
@@ -829,7 +835,7 @@ class Collector:
                         if not ARCHIVE_FALLBACK or isinstance(error,Disallowed) or (isinstance(error,HttpStatus) and error.status in (404,410)): raise
                         try: archived,text,raw,ctype=await asyncio.to_thread(archived_page,url)
                         except ValueError as inner: raise ValueError(str(error)+'；网页存档：'+str(inner))
-                        final=url
+                        final=url;how='archive'
                     if not robots.can_fetch(final): raise Disallowed('robots.txt 不允许采集跳转后的页面。')
                     parser=PageParser()
                     if 'html' in ctype.lower(): parser.feed(text);title,body=parser.result()
@@ -847,12 +853,13 @@ class Collector:
                                 rendered=PageParser();rendered.feed(html);r_title,r_body=rendered.result()
                                 if len(r_body.strip())>len(body.strip()) and not CHALLENGE.search(r_title+' '+r_body[:500]):
                                     parser,title,body,final,raw=rendered,r_title,r_body,clean_url(shown),html.encode()
+                                    if not archived: how='render'
                         except ValueError: pass
                     if len(body.strip())<20: raise ValueError('页面无足够可提取正文，可能需要登录或动态渲染。')
                     if archived and CHALLENGE.search(title+' '+body[:500]): raise ValueError('网页存档中保存的也是人机验证页面。')
                     title=(('［网页存档 '+archived+'］') if archived else '')+(title or final)
-                    if 'html' in ctype.lower() and navigation_page(final,parser,body): navs.append((final,title,body,parser.date,raw,ctype))
-                    elif not self.keep(run_id,pages,final,title,body,parser.date,raw,ctype): continue
+                    if 'html' in ctype.lower() and navigation_page(final,parser,body): navs.append((final,title,body,parser.date,raw,ctype,how))
+                    elif not self.keep(run_id,pages,final,title,body,parser.date,raw,ctype,how): continue
                     for href in parser.links:
                         try: link=clean_url(urljoin(final,href))
                         except ValueError:continue
@@ -868,12 +875,13 @@ class Collector:
                 await asyncio.sleep(delay)
             if not pages and not connector and not review_only and robots.can_fetch(base):
                 # Pages blocked but the site's RSS/Atom feed open (e.g. WordPress /feed/): use its items.
-                for item in await asyncio.to_thread(feed_pages,base,robots,source['max_pages'],terms): self.keep(run_id,pages,*item)
+                for item in await asyncio.to_thread(feed_pages,base,robots,source['max_pages'],terms): self.keep(run_id,pages,*item,method='rss')
             if not pages:
                 # Only navigation pages were reachable: keep them rather than return nothing.
                 for item in navs[:2]: self.keep(run_id,pages,*item)
             if not pages: raise ValueError('未采集到可检索正文，请查看逐页失败原因或更换入口。')
             usage=[];fresh=[p for p in pages if not p.get('reused')]
+            with store.db() as db: db.execute("UPDATE web_runs SET stage='review' WHERE id=?",(run_id,))
             for start in range(0,len(fresh),4):
                 if self.cancelled(run_id):return
                 batch=fresh[start:start+4]
@@ -902,6 +910,12 @@ class Collector:
 
 def router(store,settings):
     api=APIRouter(prefix='/api/web')
+    def main_reason(run_id,error):
+        """Plain-language reason for a run; a run with no text at all is explained by its most common page error."""
+        if run_id and '未采集到可检索正文' in (error or ''):
+            hints=[error_hint(e['error']) or e['error'] for e in store.rows('SELECT error FROM web_fetch_errors WHERE run_id=? ORDER BY id',(run_id,))]
+            if hints: return max(dict.fromkeys(hints),key=hints.count)
+        return error_hint(error)
     @api.get('/sources')
     def sources(q:str='',category:str='',page:int=1,size:int=30):
         size=max(1,min(size,100));page=max(1,page)
@@ -913,10 +927,11 @@ def router(store,settings):
             (SELECT status FROM web_runs r WHERE r.source_id=s.id ORDER BY r.id DESC LIMIT 1) last_status,
             (SELECT error FROM web_runs r WHERE r.source_id=s.id ORDER BY r.id DESC LIMIT 1) last_error,
             (SELECT created_at FROM web_runs r WHERE r.source_id=s.id ORDER BY r.id DESC LIMIT 1) last_run_at,
+            (SELECT id FROM web_runs r WHERE r.source_id=s.id ORDER BY r.id DESC LIMIT 1) last_run_id,
             (SELECT count(*) FROM web_runs r WHERE r.source_id=s.id AND r.status IN ('completed','failed')) run_count,
             (SELECT count(*) FROM web_runs r WHERE r.source_id=s.id AND r.status='completed') ok_count
             FROM web_sources s WHERE '''+where+' ORDER BY s.category, s.id LIMIT ? OFFSET ?',tuple(args+[size,(page-1)*size]))
-        for item in items: item['last_hint']=error_hint(item['last_error'])
+        for item in items: item['last_hint']=main_reason(item['last_run_id'],item['last_error'])
         groups=store.rows("SELECT category name,count(*) count,sum(enabled) enabled FROM web_sources WHERE deleted_at IS NULL GROUP BY category ORDER BY category")
         return {'items':items,'total':total,'page':page,'size':size,'groups':groups}
     @api.post('/sources/import')
@@ -953,7 +968,8 @@ def router(store,settings):
         if not settings.configured:raise ValueError('请先配置AI模型。')
         rows=store.rows('SELECT * FROM web_sources WHERE category=? AND enabled=1 AND allow_external=1 AND deleted_at IS NULL ORDER BY id LIMIT 100',(data.category,))
         if not rows:raise ValueError('该分组没有已启用且已授权外部AI的网站。')
-        ids=[queue_run(store,row) for row in rows]
+        batch=data.category+'@'+now()
+        ids=[queue_run(store,row,batch) for row in rows]
         store.audit('website_group_run',f'category={data.category}, count={len(ids)}')
         return {'queued':len(ids)}
     @api.post('/sources')
@@ -992,20 +1008,40 @@ def router(store,settings):
     @api.get('/runs')
     def runs(page:int=1,size:int=30):
         size=max(1,min(size,100));page=max(1,page)
-        items=store.rows('SELECT r.id,r.source_id,r.status,r.progress,r.error,r.created_at,r.finished_at,r.model,s.name,(SELECT count(*) FROM web_pages p WHERE p.run_id=r.id) pages,(SELECT count(*) FROM web_pages p WHERE p.run_id=r.id AND p.relevant=1) relevant FROM web_runs r JOIN web_sources s ON s.id=r.source_id ORDER BY r.id DESC LIMIT ? OFFSET ?',(size,(page-1)*size))
-        for item in items: item['hint']=error_hint(item['error'])
-        return {'items':items,'total':store.one('SELECT count(*) n FROM web_runs')['n'],'page':page,'size':size,
+        items=store.rows("SELECT r.id,r.source_id,r.status,r.stage,r.progress,r.error,r.created_at,r.finished_at,r.model,s.name,json_extract(r.config_json,'$.max_pages') max_pages,(SELECT count(*) FROM web_pages p WHERE p.run_id=r.id) pages,(SELECT count(*) FROM web_pages p WHERE p.run_id=r.id AND p.relevant IS NOT NULL) judged,(SELECT count(*) FROM web_pages p WHERE p.run_id=r.id AND p.relevant=1) relevant FROM web_runs r JOIN web_sources s ON s.id=r.source_id ORDER BY r.id DESC LIMIT ? OFFSET ?",(size,(page-1)*size))
+        for item in items: item['hint']=main_reason(item['id'],item['error'])
+        batches=store.rows("SELECT json_extract(config_json,'$.batch') batch,count(*) total,sum(status IN ('completed','failed','cancelled')) done,sum(status='queued') queued,sum(status='running') running FROM web_runs WHERE coalesce(json_extract(config_json,'$.batch'),'')!='' GROUP BY batch HAVING sum(status IN ('queued','running'))>0 ORDER BY max(id) DESC")
+        for b in batches: b['category']=b['batch'].rsplit('@',1)[0]
+        return {'items':items,'total':store.one('SELECT count(*) n FROM web_runs')['n'],'page':page,'size':size,'batches':batches,
                 'active':store.one("SELECT count(*) n FROM web_runs WHERE status IN ('queued','running')")['n']}
+    @api.post('/runs/batch/cancel')
+    def cancel_batch(data:BatchInput):
+        with store.db() as db:
+            count=db.execute("UPDATE web_runs SET status='cancelled',finished_at=? WHERE status='queued' AND json_extract(config_json,'$.batch')=?",(now(),data.batch)).rowcount
+        store.audit('website_group_cancelled',f'category={data.batch.rsplit("@",1)[0]}, count={count}')
+        return {'cancelled':count}
+    @api.get('/discoveries')
+    def discoveries(limit:int=5):
+        """Latest relevant pages for the overview, newest first."""
+        rows=store.rows("SELECT p.id,p.title,p.url,p.date,p.reason,p.imports_json,p.fetched_at,r.id run_id,s.name source FROM web_pages p JOIN web_runs r ON r.id=p.run_id JOIN web_sources s ON s.id=r.source_id WHERE p.relevant=1 AND r.status='completed' ORDER BY p.id DESC LIMIT ?",(max(1,min(limit,20)),))
+        for row in rows: row['imports']=json.loads(row.pop('imports_json'))
+        return {'items':rows}
     @api.get('/runs/{run_id}')
     def detail(run_id:int):
         run=store.one('SELECT * FROM web_runs WHERE id=?',(run_id,))
         if not run:raise HTTPException(404,'检索任务不存在。')
         run['config']=json.loads(run.pop('config_json'));run['usage']=json.loads(run.pop('usage_json'))
-        run['items']=store.rows('SELECT id,url,title,date,fetched_at,relevant,reason,quote,imports_json,length(body) characters FROM web_pages WHERE run_id=?',(run_id,))
-        for item in run['items']: item['imports']=json.loads(item.pop('imports_json'))
+        run['items']=store.rows('SELECT id,url,title,date,fetched_at,relevant,reason,quote,imports_json,method,body FROM web_pages WHERE run_id=?',(run_id,))
+        for item in run['items']:
+            item['imports']=json.loads(item.pop('imports_json'));body=item.pop('body');item['characters']=len(body)
+            if not item['method']: item['method']='archive' if item['title'].startswith('［网页存档') else 'direct'
+            # Same text already saved to the knowledge base, from this or any earlier run (see ingest digest).
+            digest=hashlib.sha256(('knowledge\0False\0'+item['title']+'\0'+body).encode()).hexdigest()
+            item['in_knowledge']=bool(item['imports'].get('knowledge') or store.one('SELECT 1 x FROM documents WHERE digest=?',(digest,)))
         run['errors']=store.rows('SELECT url,error FROM web_fetch_errors WHERE run_id=?',(run_id,))
         for error in run['errors']: error['hint']=error_hint(error['error'])
-        run['hint']=error_hint(run['error'])
+        run['hint']=main_reason(run_id,run['error'])
+        run['judged']=sum(p['relevant'] is not None for p in run['items'])
         return run
     @api.post('/runs/{run_id}/cancel')
     def cancel(run_id:int):
