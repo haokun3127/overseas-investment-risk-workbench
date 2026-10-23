@@ -34,10 +34,15 @@ class Worker:
         with self.store.db() as db:
             claimed=db.execute("UPDATE jobs SET status='running',started_at=? WHERE id=? AND status='queued'",(now(),job['id'])).rowcount
             if not claimed: return
+        doc = None
         try:
             doc = self.store.one('SELECT * FROM documents WHERE id=?',(job['document_id'],))
             company=json.loads(job.get('company_json') or '{}')
             rules = self.store.setting('rules')
+            if not doc:
+                raise ValueError('资料已删除，任务无法继续。')
+            if doc.get('quarantined_at'):
+                raise ValueError('资料已隔离，不能进入分析。')
             if not self.settings.configured:
                 raise ValueError('尚未配置模型服务，请填写 .env 后重启。')
             if not rules['confirmed']:
@@ -46,12 +51,16 @@ class Worker:
             if not doc['allow_external']:
                 raise ValueError('该资料未获准发送到外部模型。')
             context=company if company.get('allow_external') else {}
+            job_company_id = doc.get('company_id') or company.get('id') or 0
             chunks = self.store.rows('SELECT * FROM chunks WHERE document_id=? ORDER BY id',(doc['id'],))
             with self.store.db() as db:
                 db.execute('UPDATE jobs SET total=? WHERE id=?',(len(chunks),job['id']))
             results, events, usage, knowledge = [], [], [], {}
             for index, chunk in enumerate(chunks):
-                hits = retrieve(self.store,chunk['text'],external=external,company_id=0)
+                hits = retrieve(self.store,chunk['text'],external=external,company_id=job_company_id,per_document=True)
+                for h in hits:
+                    h.pop('zh_summary', None)
+                    h.pop('zh_keywords', None)
                 references = {f'S{chunk["id"]}':{'text':chunk['text'],'kind':'source','document_id':doc['id'],'locator':chunk['locator'],'title':doc['title']}}
                 for hit in hits:
                     references[f'K{hit["id"]}'] = {**hit,'kind':'knowledge'}
@@ -87,7 +96,7 @@ class Worker:
                     db.execute('''INSERT INTO events(analysis_id,title,category,level,summary,impact,recommendation,evidence_json)
                         VALUES (?,?,?,?,?,?,?,?)''',(analysis_id,event['title'],event['category'],event['level'],event['summary'],event['impact'],event['recommendation'],json.dumps(event['evidence'],ensure_ascii=False)))
                 db.execute("UPDATE jobs SET status='completed',finished_at=? WHERE id=?",(now(),job['id']))
-            self.store.audit('analysis_completed',f'job={job["id"]}, analysis={analysis_id}')
+            self.store.audit('analysis_completed',f'job={job["id"]}, analysis={analysis_id}',company_id=doc.get('company_id'))
         except asyncio.CancelledError:
             with self.store.db() as db:
                 db.execute("UPDATE jobs SET status='failed',error='服务停止，任务中断，请重试。',finished_at=? WHERE id=?",(now(),job['id']))
@@ -96,4 +105,4 @@ class Worker:
             message = str(error) if isinstance(error,ValueError) else '处理失败，请检查资料格式及服务配置后重试。'
             with self.store.db() as db:
                 db.execute("UPDATE jobs SET status='failed',error=?,finished_at=? WHERE id=?",(message[:500],now(),job['id']))
-            self.store.audit('analysis_failed',f'job={job["id"]}, type={type(error).__name__}')
+            self.store.audit('analysis_failed',f'job={job["id"]}, type={type(error).__name__}',company_id=doc.get('company_id') if doc else None)

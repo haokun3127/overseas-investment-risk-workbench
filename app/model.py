@@ -43,7 +43,10 @@ async def call_model(settings, payload, system=SYSTEM):
     validate_endpoint(settings)
     messages = [{'role':'system','content':system},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}]
     responses = settings.model_wire_api == 'responses'
-    request = {'model':settings.model_name, 'store':settings.model_store}
+    wire_model = settings.model_name
+    if urlparse(settings.model_base_url).hostname == 'api.deepseek.com' and wire_model.lower() in ('v4.1-flash-1017', 'deepseek-v4.1-flash', 'deepseek-v4.1-flash-1017'):
+        wire_model = 'deepseek-flash'
+    request = {'model':wire_model, 'store':settings.model_store}
     if responses:
         request['input'] = messages
         if settings.model_reasoning_effort:
@@ -77,9 +80,12 @@ async def call_model(settings, payload, system=SYSTEM):
                     text = data['choices'][0]['message']['content']
                 if not isinstance(text,str) or not text.strip() or len(text)>100000:
                     raise ValueError('模型输出为空或超出长度限制。')
-                if text.strip().startswith('```'):
-                    text = text.strip().removeprefix('```json').removeprefix('```').removesuffix('```').strip()
-                return json.loads(text), data.get('usage',{})
+                cleaned = text.strip()
+                if cleaned.startswith('```'):
+                    cleaned = cleaned.removeprefix('```json').removeprefix('```').removesuffix('```').strip()
+                if not cleaned.startswith('{') and '{' in cleaned and '}' in cleaned:
+                    cleaned = cleaned[cleaned.find('{'):cleaned.rfind('}')+1]
+                return json.loads(cleaned, strict=False), data.get('usage',{})
             except (httpx.TimeoutException,httpx.NetworkError):
                 if attempt == 2:
                     raise ValueError('模型服务超时或网络不可达，请检查连接后重试。')

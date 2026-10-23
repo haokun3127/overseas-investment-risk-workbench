@@ -25,9 +25,10 @@ def test_profile_update_sync_and_company_retrieval(client):
     assert '棉花进口' in c.get(f'/api/documents/{doc}').json()['body']
     bid=c.post('/api/companies',json={'name':'测试乙公司','business':'棉花贸易'}).json()['id']
     bdoc=c.post(f'/api/companies/{bid}/knowledge').json()['id']
-    assert {h['document_id'] for h in retrieve(c.app.state.store,'棉花')}=={bdoc}
-    c.post(f'/api/companies/{aid}/activate')
-    assert {h['document_id'] for h in retrieve(c.app.state.store,'棉花',external=True)}=={doc}
+    # Retrieval scope is explicit: no company means public knowledge only, never a global "current" company.
+    assert {h['document_id'] for h in retrieve(c.app.state.store,'棉花')}==set()
+    assert {h['document_id'] for h in retrieve(c.app.state.store,'棉花',company_id=bid)}=={bdoc}
+    assert {h['document_id'] for h in retrieve(c.app.state.store,'棉花',external=True,company_id=aid)}=={doc}
     assert c.get('/api/documents?kind=knowledge').json()['total']==2
     assert c.put('/api/companies/999',json=a).status_code==404
     assert c.post('/api/companies',json={'name':'   '}).status_code==400

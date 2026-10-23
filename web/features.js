@@ -1,34 +1,47 @@
 'use strict';
 // Business workflow enhancements share the same API and design tokens as the workbench.
 const workDrafts = new Map();
-const activityNames={rules_updated:'更新风险规则',document_imported:'导入资料',file_imported:'上传文件',document_policy_changed:'调整资料使用范围',document_deleted:'删除资料',event_reviewed:'保存业务复核',analysis_completed:'完成风险分析',analysis_failed:'分析失败',job_cancelled:'取消分析任务',events_exported:'导出风险台账',demo_seeded:'载入演示数据',demo_cleared:'清除演示数据',model_checked:'检查模型连接',company_saved:'保存公司档案',company_knowledge_synced:'公司档案放入知识库',website_configured:'保存网站配置',website_imported_sources:'批量导入网站',website_toggled:'启用或停用网站',website_deleted:'删除网站',website_searched:'完成网站检索',website_group_run:'分组批量检索',website_rereview:'重新筛选检索结果',website_imported:'网站页面入库',website_group_cancelled:'取消分组剩余检索'};
+const activityNames={rules_updated:'更新风险规则',document_imported:'导入资料',file_imported:'上传文件',document_policy_changed:'调整资料使用范围',document_deleted:'删除资料',event_reviewed:'保存业务复核',analysis_completed:'完成风险分析',analysis_failed:'分析失败',job_cancelled:'取消分析任务',events_exported:'导出风险台账',demo_seeded:'载入演示数据',demo_cleared:'清除演示数据',model_checked:'检查模型连接',company_saved:'保存公司档案',company_knowledge_synced:'公司档案放入知识库',website_configured:'保存网站配置',website_imported_sources:'批量导入网站',website_toggled:'启用或停用网站',website_deleted:'删除网站',website_searched:'完成网站检索',website_group_run:'分组批量检索',website_rereview:'重新筛选检索结果',website_imported:'网站页面入库',website_group_cancelled:'取消分组剩余检索',documents_quarantined:'隔离可疑资料',documents_unquarantined:'撤销资料隔离',dates_repaired:'修复资料日期',dates_reverted:'回滚资料日期修复',company_registered:'注册企业账号'};
 // The bare id= in an audit detail names a different object depending on the action.
 const activityObject=action=>/^company_/.test(action)?'公司编号：':/^website_(configured|toggled|deleted)/.test(action)?'网站编号：':/^website_(searched|rereview)/.test(action)?'检索任务编号：':/^job_/.test(action)?'任务编号：':'资料编号：';
-function activityDetail(detail,action=''){return detail.replace(/connection and JSON protocol verified/g,'连接与 JSON 协议验证通过').replace(/allow_external=True/g,'允许外部分析').replace(/allow_external=False/g,'未授权 AI 使用').replace(/created=True/g,'已新增').replace(/created=False/g,'资料重复').replace(/status=accepted/g,'结论：已认可').replace(/status=needs_change/g,'结论：需修正').replace(/status=pending/g,'结论：待复核').replace(/scope=demo/g,'范围：演示数据').replace(/scope=real/g,'范围：真实资料').replace(/scope=all/g,'范围：全部资料').replace(/enabled=1/g,'已启用').replace(/enabled=0/g,'已停用').replace(/kind=knowledge/g,'用途：知识库').replace(/kind=event/g,'用途：风险资料').replace(/event=/g,'事件编号：').replace(/events=/g,'风险事件数：').replace(/document=/g,'资料编号：').replace(/job=/g,'任务编号：').replace(/analysis=/g,'分析编号：').replace(/category=/g,'分组：').replace(/count=/g,'数量：').replace(/rows=/g,'记录数：').replace(/skipped=/g,'跳过：').replace(/errors=/g,'无效：').replace(/created=/g,'新增数：').replace(/\bid=/g,activityObject(action));}
+function activityDetail(detail,action=''){return detail.replace(/connection and JSON protocol verified/g,'连接与 JSON 协议验证通过').replace(/allow_external=True/g,'允许外部分析').replace(/allow_external=False/g,'未授权 AI 使用').replace(/created=True/g,'已新增').replace(/created=False/g,'资料重复').replace(/status=accepted/g,'结论：已认可').replace(/status=needs_change/g,'结论：需修正').replace(/status=pending/g,'结论：待复核').replace(/scope=demo/g,'范围：演示数据').replace(/scope=real/g,'范围：非演示数据').replace(/scope=all/g,'范围：全部资料').replace(/enabled=1/g,'已启用').replace(/enabled=0/g,'已停用').replace(/kind=knowledge/g,'用途：知识库').replace(/kind=event/g,'用途：风险资料').replace(/event=/g,'事件编号：').replace(/events=/g,'风险事件数：').replace(/document=/g,'资料编号：').replace(/job=/g,'任务编号：').replace(/analysis=/g,'分析编号：').replace(/category=/g,'分组：').replace(/company=None/g,'全部公司').replace(/company=/g,'公司编号：').replace(/reason=/g,'原因：').replace(/count=/g,'数量：').replace(/rows=/g,'记录数：').replace(/skipped=/g,'跳过：').replace(/errors=/g,'无效：').replace(/created=/g,'新增数：').replace(/\bid=/g,activityObject(action));}
 
 function ruleFields(r){
+  if (state.auth?.role === 'company') {
+    return ruleFieldsReadOnly(r);
+  }
   return `<p class="form-note">逐项填写业务标准。保存后用于后续分析，历史版本保留原规则。</p><div class="form-grid"><label class="field full">规则版本<input name="version" maxlength="60" required value="${esc(r.version)}"></label><label class="field full">风险类型（每行一个，最多30个）<textarea name="categories" rows="6" required>${esc(r.categories.join('\n'))}</textarea></label>${Object.entries(levels).map(([v,l])=>`<label class="field full">${l}判定标准<textarea name="level_${v}" maxlength="2000" rows="3" required>${esc(r.levels[v])}</textarea></label>`).join('')}<label class="field full">适用范围与补充说明<textarea name="notes" rows="3" maxlength="5000">${esc(r.notes)}</textarea></label></div><label class="check-field"><input type="checkbox" name="confirmed" ${r.confirmed?'checked':''}><span>这份规则已经过甲方业务确认，可以用于后续风险分析。</span></label><button class="primary" type="submit">保存规则</button><div id="rules-error" aria-live="polite"></div>`;
+}
+
+function ruleFieldsReadOnly(r) {
+  const fields = `<label class="field full">规则版本<input value="${esc(r.version)}" disabled></label><label class="field full">风险类型<textarea rows="6" disabled>${esc(r.categories.join('\n'))}</textarea></label>${Object.entries(levels).map(([v, l]) => `<label class="field full">${l}判定标准<textarea rows="3" disabled>${esc(r.levels[v])}</textarea></label>`).join('')}<label class="field full">适用范围与补充说明<textarea rows="3" disabled>${esc(r.notes)}</textarea></label>`;
+  return `<p class="form-note">风险分类分级规则由平台管理员维护，企业账号只读。当前状态：${r.confirmed ? '已确认，可用于分析' : '尚未确认，分析会被拒绝'}。</p><div class="form-grid">${fields}</div>`;
 }
 
 function discoveriesPanel(items){
   return `<section class="panel discoveries-panel"><div class="panel-heading"><h2>${icon('documents')}最新检索发现</h2><a class="panel-link" href="#websites">网站检索 ${icon('arrow')}</a></div><ul class="discovery-list">${items.map(p=>`<li><div><a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.title)}</a><small>${esc(p.source)}${p.date?' · '+esc(p.date):''} · 发现于 ${when(p.fetched_at)}</small><p>${esc(p.reason)}</p></div>${p.imports.knowledge?'<span class="web-tag ok">已在知识库</span>':`<button class="secondary small" data-discovery-import="${p.id}">存入知识库</button>`}</li>`).join('')}</ul></section>`;
 }
 function workspacePanel(w){
-  return `<section class="panel workflow-panel"><div class="panel-heading"><h2>分析准备与业务待办</h2><small>当前工作台</small></div><div class="workspace-checks">${w.checks.map(c=>`<a href="${c.href}"><span class="check-state">${icon(c.ready?'check':'arrow')}</span><span><strong>${esc(c.label)}</strong><small>${c.ready?'已具备':'前往准备'}</small></span></a>`).join('')}</div><div class="workspace-next"><span>尚未产出分析结果 <strong>${w.unanalyzed}</strong> 条</span><a href="#documents">处理待分析资料 ${icon('arrow')}</a><a href="#knowledge">补充参考依据 ${icon('arrow')}</a></div></section>`;
+  return `<section class="panel workflow-panel"><div class="panel-heading"><h2 data-kicker="READINESS">分析准备与业务待办</h2><small>${w.checks.filter(c=>c.ready).length} / ${w.checks.length} 已就绪</small></div><div class="workspace-checks">${w.checks.map(c=>`<a href="${c.href}" class="${c.ready?'is-ready':'is-todo'}"><span class="check-state">${icon(c.ready?'check':'arrow')}</span><span><strong>${esc(c.label)}</strong><small>${c.ready?'已具备':'前往准备'}</small></span></a>`).join('')}</div><div class="workspace-next"><span>尚未产出分析结果 <strong>${w.unanalyzed}</strong> 条</span><a href="#documents">处理待分析资料 ${icon('arrow')}</a><a href="#knowledge">补充参考依据 ${icon('arrow')}</a></div></section>`;
 }
 
 async function enhanceView(route,html){
   const host=document.createElement('div');host.innerHTML=html;
-  if(route==='settings'){
+  if(route==='settings'&&state.auth?.role==='company'){
+    host.querySelector('#rules-form').innerHTML=ruleFields(state.config.rules);
+    host.querySelector('#rules-form').removeAttribute('id');
+    host.querySelectorAll('.definition dd').forEach((dd)=>{if(/^(未设置|模型默认)$/.test(dd.textContent.trim())||dd.previousElementSibling?.textContent.match(/服务地址|推理强度|接口协议|响应存储/))dd.textContent='由平台管理员配置';});
+  }
+  else if(route==='settings'){
     host.querySelector('#rules-form').innerHTML=ruleFields(state.config.rules);
     host.querySelector('.panel-content').insertAdjacentHTML('beforeend',`<h3>演示数据</h3><p class="form-note">内置的虚构演示资料和风险事件（标有“演示”）只用于熟悉流程，不是真实风险。正式使用前建议清除。</p><p><button class="secondary" id="clear-demo">清除全部演示数据</button></p>`);
     host.querySelector('.panel-content').insertAdjacentHTML('beforeend',`<h3>连接检查</h3><p class="form-note">仅发送固定合成测试内容，不读取业务资料。外部 API 可能产生少量调用费用。</p><button class="secondary" id="model-check" ${state.config.configured?'':'disabled'}>发送合成内容并检查连接</button><div id="model-check-result" aria-live="polite"></div>`);
     try{const r=await api('/runtime');host.insertAdjacentHTML('beforeend',`<section class="panel"><div class="panel-heading"><h2>服务运行状态</h2><button class="text-button" data-refresh>更新状态</button></div><div class="panel-content"><dl class="definition"><dt>状态时间</dt><dd>${when(r.checked_at)}</dd><dt>后台队列</dt><dd>${r.worker_enabled?'已启用':'未启用（当前实例不执行任务）'}</dd><dt>资料与索引</dt><dd>${r.documents} 条资料 · ${r.chunks} 个文本片段 · ${r.analyses} 个分析版本</dd><dt>数据库大小</dt><dd>${(r.database_bytes/1048576).toFixed(2)} MB（不含附件及 WAL 文件）</dd><dt>磁盘可用</dt><dd>${(r.disk_free_bytes/1073741824).toFixed(2)} GB</dd><dt>最近分析记录</dt><dd>${r.last_analysis?when(r.last_analysis.created_at)+' · '+esc(r.last_analysis.model):'暂无分析记录'}</dd><dt>网站抓取备用出口</dt><dd>${r.fetch_proxy?'已启用（直连失败时改走本机代理）':'未配置'}</dd><dt>浏览器渲染服务</dt><dd>${r.renderer?'已启用（脚本加载的页面由隔离浏览器渲染）':'未配置'}</dd><dt>中文摘要</dt><dd>${r.enrich_pending?`${r.enrich_pending} 份资料待生成`:'全部已生成'}${r.enrich_failed?` · ${r.enrich_failed} 份生成失败`:''}</dd><dt>模型最近一次错误</dt><dd>${r.model_error?`${when(r.model_error.at)} · ${esc(r.model_error.error)}`:'暂无'}</dd><dt>自动备份</dt><dd>${!r.backup?'未配置（请按 README 设置每日备份）':r.backup.created_at?'最近一次 '+when(r.backup.created_at)+' · 共保留 '+r.backup.count+' 份':'已配置，尚未生成备份'}</dd></dl><p class="form-note">备份包含数据库和附件，不含密钥配置。恢复流程见项目 README。</p></div></section>`);}catch(e){host.insertAdjacentHTML('beforeend',errorBox('运行状态读取失败：'+e.message));}
   }
   if(route==='events'){
-    const href='api/export/events?'+new URLSearchParams({...state.filter,demo:state.scope});
+    const href='api/export/events?'+new URLSearchParams({...state.filter,demo:scopeValue()});
     host.querySelector('.page-heading .actions').insertAdjacentHTML('afterbegin',`<a class="secondary" href="${esc(href)}">导出当前筛选 CSV</a>`);
-    host.querySelector('.page-heading .actions').insertAdjacentHTML('afterbegin',`<a class="secondary" href="#report?${esc(new URLSearchParams({...state.filter,demo:state.scope}))}">生成风险简报</a>`);
+    host.querySelector('.page-heading .actions').insertAdjacentHTML('afterbegin',`<a class="secondary" href="#report?${esc(new URLSearchParams({...state.filter,demo:scopeValue()}))}">生成风险简报</a>`);
     host.querySelector('#event-filter').insertAdjacentHTML('beforeend','<span class="filter-help">导出包含全部匹配事件、复核意见及引用依据。</span>');
   }
   if(route==='event'){
@@ -38,7 +51,7 @@ async function enhanceView(route,html){
     host.querySelector('.back-link').href=state.lastEvents||eventHref();
   }
   if(route==='documents'||route==='knowledge'){
-    host.querySelector('.page-heading .actions').insertAdjacentHTML('beforeend','<a class="secondary" href="#websites">从网站检索资料</a>');
+    if(state.auth?.role==='admin')host.querySelector('.page-heading .actions').insertAdjacentHTML('beforeend','<a class="secondary" href="#websites">从网站检索资料</a>');
     const form=host.querySelector('#document-filter');
     form.querySelector('input').placeholder='按标题或来源搜索';
     form.insertAdjacentHTML('beforeend',`<label>使用范围<select name="policy">${[['','全部资料'],['local','未授权 AI 使用'],['external','允许外部分析']].map(([v,l])=>`<option value="${v}" ${state.filter.policy===v?'selected':''}>${l}</option>`).join('')}</select></label>${route==='documents'?`<label>分析状态<select name="status">${[['','全部状态'],['unanalysed','尚无分析结果'],['queued','排队中'],['running','分析中'],['completed','已完成'],['failed','失败']].map(([v,l])=>`<option value="${v}" ${state.filter.status===v?'selected':''}>${l}</option>`).join('')}</select></label>`:''}<label>排序<select name="sort"><option value="">最近入库</option><option value="date" ${state.filter.sort==='date'?'selected':''}>资料日期（新到旧）</option></select></label><button class="text-button" type="button" id="reset-doc-filter">重置</button>`);
@@ -47,7 +60,7 @@ async function enhanceView(route,html){
     const body=importForm.querySelector('[name=body]');
     if(body)body.insertAdjacentHTML('afterend','<small id="body-count">0 / 60000 字符</small>');
     const select=host.querySelector('#analyze-selected');
-    if(select){select.textContent='分析所选资料（0）';select.disabled=true;host.querySelector('#document-filter').insertAdjacentHTML('afterend','<p class="selection-help">勾选资料后开始分析。已归档资料可查看原文和分析记录。</p>');}
+    if(select){select.textContent='分析所选资料（0）';select.disabled=true;host.querySelector('#document-filter').insertAdjacentHTML('afterend','<p class="selection-help">勾选资料后开始分析。演示数据只能查看，不能提交分析。</p>');}
   }
   if(route==='jobs'&&!host.querySelector('#job-filter')){
     host.querySelector('.panel-heading').insertAdjacentHTML('afterend',`<form class="filters" id="job-filter"><label class="search-field">搜索任务<input name="q" placeholder="输入资料标题或任务编号"></label><label>任务状态<select name="status"><option value="">全部状态</option>${['queued','running','completed','failed'].map(s=>`<option value="${s}">${statuses[s]}</option>`).join('')}</select></label><button class="secondary small">筛选</button><span id="job-match" class="muted" aria-live="polite"></span></form>`);
@@ -57,12 +70,10 @@ async function enhanceView(route,html){
   }
   if(route==='overview'||route==='settings'||route==='knowledge'){
     try{
-      const w=await api('/workspace');
+      const w=(route==='overview'&&state.overviewWorkspace)||await api('/workspace');
       if(route==='overview'){
-        host.querySelector('.overview-grid').insertAdjacentHTML('afterend',workspacePanel(w));
-        try{const f=await api('/web/discoveries?limit=5');if(f.items.length)host.querySelector('.workflow-panel').insertAdjacentHTML('beforebegin',discoveriesPanel(f.items));}catch(e){}
+        if(state.auth?.role==='admin'){try{const f=await api('/web/discoveries?limit=5');if(f.items.length)host.querySelector('.events-panel').insertAdjacentHTML('afterend',discoveriesPanel(f.items));}catch(e){}}
         host.querySelector('.page-heading').classList.add('overview-heading');
-        host.querySelector('.page-heading h1').insertAdjacentHTML('beforebegin','<div class="page-eyebrow">海外投资 · 风险研判</div>');
       }
       if(route==='knowledge'){
         const d=w.documents.knowledge||{count:0,authorized:0,characters:0};
@@ -85,7 +96,7 @@ function bindFeatures(){
       e.preventDefault();e.stopImmediatePropagation();const b=$('[type=submit]',rulesForm);b.disabled=true;
       const f=new FormData(rulesForm);
       const rules={version:f.get('version').trim(),categories:f.get('categories').split('\n').map(v=>v.trim()).filter(Boolean),levels:Object.fromEntries(Object.keys(levels).map(v=>[v,f.get('level_'+v).trim()])),notes:f.get('notes'),confirmed:f.has('confirmed')};
-      try{await api('/rules',{method:'PUT',body:rules});toast('规则已保存，后续分析使用此版本');await render();}catch(err){$('#rules-error').innerHTML=errorBox(err.message);b.disabled=false;}
+      try{await api('/rules',{method:'PUT',body:rules});toast(rules.confirmed?'规则已保存，后续分析使用此版本':'规则已保存，确认前分析仍会被拒绝');await render();}catch(err){$('#rules-error').innerHTML=errorBox(err.message);b.disabled=false;}
     },true);
   }
   $('#event-filter')?.addEventListener('submit',e=>{

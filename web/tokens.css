@@ -1,0 +1,48 @@
+/* 夜航海图室 tokens: ink frame for orientation, archive paper for work. Loaded right after style.css. */
+:root {
+  /* 玄墨 */
+  --ink-950:#050a14; --ink-900:#0a1322; --ink-850:#0d182b; --ink-800:#13223b; --ink-700:#1a2b47; --ink-600:#24395c;
+  --ink-line:rgb(148 178 230 / 14%); --ink-line-strong:rgb(148 178 230 / 26%);
+  --ink-text:#eef3fb; --ink-text-2:rgb(214 226 245 / 78%); --ink-text-3:rgb(214 226 245 / 64%);
+  /* 档案纸 */
+  --paper:#ffffff; --paper-50:#f7f8fa; --paper-100:#eef1f5; --paper-200:#e4e8ee; --paper-warm:#fcfbf8;
+  --line:#e3e8ef; --line-strong:#c9d2de; --line-row:#e8ecf2;
+  --text:#0f1a2b; --text-2:#43536a; --text-3:#5d6d83;
+  /* 潮汐青 / 鎏金 */
+  --tide-50:#f1f8f7; --tide-100:#e0f1ef; --tide-200:#b8e0db; --tide-300:#7ee8dc; --tide-400:#3ccfc0; --tide-500:#1faea2; --tide-600:#0f8a86; --tide-700:#0a6f70; --tide-800:#075456;
+  --tide-soft:rgb(15 138 134 / 8%); --tide-glow:rgb(60 207 192 / 60%);
+  --brass-300:#ecd39a; --brass-400:#d4af6a; --brass-600:#9a7a3c; --brass-700:#7a5f2c;
+  /* 风险（纸上 / 墨上） */
+  --red:#c8344a; --red-ink:#ff7084; --orange:#b85a14; --orange-ink:#ffa866;
+  --yellow:#8f6b04; --yellow-ink:#f3cf5a; --green:#1f7d53; --green-ink:#62d6a0;
+  /* 圆角 */
+  --r-xs:6px; --r-sm:8px; --r-md:10px; --r-lg:14px; --r-xl:20px; --r-pill:999px;
+  /* 层级：光源在左上，阴影一律向下 */
+  --elev-1:inset 0 1px 0 rgb(255 255 255 / 80%),0 1px 2px rgb(10 19 34 / 6%),0 8px 24px -12px rgb(10 19 34 / 14%);
+  --elev-2:inset 0 1px 0 rgb(255 255 255 / 90%),0 2px 4px rgb(5 10 20 / 8%),0 28px 56px -24px rgb(5 10 20 / 42%);
+  --elev-3:0 1px 0 rgb(255 255 255 / 8%) inset,0 12px 24px -12px rgb(5 10 20 / 30%),0 40px 96px -20px rgb(5 10 20 / 55%);
+  --ink-surface:linear-gradient(180deg,var(--ink-800),var(--ink-850));
+  --ink-edge:inset 0 1px 0 rgb(255 255 255 / 6%),0 0 0 1px var(--ink-line);
+  --focus-ring:0 0 0 2px var(--paper),0 0 0 4px var(--tide-600);
+  /* 动效 */
+  --ease-out:cubic-bezier(.16,1,.3,1); --ease-std:cubic-bezier(.2,.8,.2,1); --ease-in:cubic-bezier(.4,0,1,1);
+  --d-1:120ms; --d-2:180ms; --d-3:240ms; --d-4:360ms; --d-5:720ms;
+  /* 布局 */
+  --shell-side:248px; --shell-top:56px; --deck-h:232px; --deck-fade:72px;
+  /* 内容列：顶栏、主区与页脚共用；右栏定宽，KPI 第 4 格与之对齐 */
+  --content-max:1600px; --rail-w:360px;
+  /* 字体：只用本机字体，不打包、不外链。展示字体与界面同属无衬线，靠字重与字距区分层级 */
+  --font-cjk-sans:"MiSans","HarmonyOS Sans SC","Alibaba PuHuiTi 3.0","AlibabaPuHuiTi-3","PingFang SC","Source Han Sans SC","Noto Sans CJK SC","Microsoft YaHei UI","Microsoft YaHei";
+  --font-ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI Variable Text","Segoe UI",var(--font-cjk-sans),system-ui,sans-serif;
+  --font-display:var(--font-cjk-sans),-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
+  --font-mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Mono",Menlo,Consolas,monospace;
+}
+body[data-route=overview] { --deck-h:0px; }
+@media (max-width:1439.98px) { :root { --rail-w:340px; } }
+@media (min-width:1920px) { :root { --rail-w:400px; } }
+@media (min-width:2200px) { :root { --content-max:1760px; } }
+@media (max-width:1279.98px) { :root { --shell-side:208px; --rail-w:320px; } }
+@media (max-width:700px) { :root { --shell-top:52px; --deck-h:168px; --deck-fade:48px; } body[data-route=overview] { --deck-h:0px; } }
+@media (prefers-contrast:more) {
+  :root { --ink-line:rgb(148 178 230 / 40%); --ink-text-2:#e3ebf8; --ink-text-3:#d0dbee; --line:#aab6c6; --text-3:#3d4b5e; }
+}

@@ -28,6 +28,11 @@ def add_source(c,**extra):
     assert r.status_code==200,r.text
     return r.json()['id']
 
+def make_company(c,name='网站入库归属公司'):
+    r=c.post('/api/companies',json={'name':name,'allow_external':True})
+    assert r.status_code==200,r.text
+    return r.json()['id']
+
 def fake_fetch(url,base,robots=None,relaxed=False,**kw):
     if url.endswith('robots.txt'):
         return url,'User-agent: *\nDisallow: /private/\n',b'','text/plain'
@@ -57,9 +62,10 @@ def test_retrieval_preview_dedup_import_and_risk_queue(web_client,monkeypatch):
     unrelated=next(p for p in run['items'] if not p['relevant'])
     original=c.get('/api/web/pages/'+str(relevant['id'])).json()
     assert relevant['quote'] in original['body'] and original['url'].startswith('https://source.example/news/')
-    assert c.post('/api/web/import',json={'page_ids':[relevant['id'],unrelated['id']],'kind':'both'}).status_code==400
+    owner=make_company(c)
+    assert c.post('/api/web/import',json={'page_ids':[relevant['id'],unrelated['id']],'kind':'both','company_id':owner}).status_code==400
     assert not c.get('/api/documents').json()['items']
-    result=c.post('/api/web/import',json={'page_ids':[relevant['id']],'kind':'both','analyze':True}).json()
+    result=c.post('/api/web/import',json={'page_ids':[relevant['id']],'kind':'both','analyze':True,'company_id':owner}).json()
     assert len(result['items'])==2 and all(i['created'] for i in result['items'])
     assert next(i for i in result['items'] if i['kind']=='event')['job_id']
     assert c.get('/api/knowledge/search?q=港口原料').json()['items']
@@ -67,7 +73,7 @@ def test_retrieval_preview_dedup_import_and_risk_queue(web_client,monkeypatch):
     assert doc['url']==original['url'] and doc['demo']==0
     snapshot=c.get('/api/documents/'+str(doc['id'])+'/file')
     assert snapshot.status_code==200 and 'attachment' in snapshot.headers['content-disposition']
-    second=c.post('/api/web/import',json={'page_ids':[relevant['id']],'kind':'both','analyze':True}).json()
+    second=c.post('/api/web/import',json={'page_ids':[relevant['id']],'kind':'both','analyze':True,'company_id':owner}).json()
     assert not any(i['created'] for i in second['items'])
     assert c.get('/api/jobs').json()['total']==1
 
@@ -76,7 +82,7 @@ def test_search_failure_does_not_auto_import(web_client,monkeypatch):
     async def wrong(settings,payload,system=None):
         return {'items':[{'id':p['id'],'relevant':True,'reason':'假引用','quote':'这是不存在于任何页面的伪造原文'} for p in payload['pages']]},{}
     monkeypatch.setattr(websearch.model,'call_model',wrong)
-    run=process(web_client,add_source(web_client,auto_import='both',auto_analyze=True))
+    run=process(web_client,add_source(web_client,auto_import='both',auto_analyze=True,target_company_id=make_company(web_client)))
     # Fabricated quotes are never accepted: pages stay unjudged, the run still completes, nothing is imported.
     assert run['status']=='completed' and 'AI 未给出可核验的判定' in run['error']
     assert run['items'] and all(p['relevant'] is None and p['reason']==websearch.UNJUDGED for p in run['items'])
@@ -123,7 +129,7 @@ def test_authorization_cancel_edit_pause(web_client):
 
 def test_automatic_ingest_keeps_knowledge_and_analysis_separate(web_client,monkeypatch):
     monkeypatch.setattr(websearch,'fetch_page',fake_fetch);monkeypatch.setattr(websearch.model,'call_model',fake_model)
-    run=process(web_client,add_source(web_client,auto_import='both',auto_analyze=True))
+    run=process(web_client,add_source(web_client,auto_import='both',auto_analyze=True,target_company_id=make_company(web_client)))
     assert run['status']=='completed'
     assert web_client.get('/api/documents?kind=knowledge').json()['total']==1
     assert web_client.get('/api/documents?kind=event').json()['total']==1

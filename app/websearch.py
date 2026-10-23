@@ -17,11 +17,12 @@ import zlib
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import quote, unquote, urlencode, urljoin, urlsplit, urlunsplit
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 from . import model
 from . import companies
+from .access import admin_only, session_company
 from .ingest import insert_document
 from .store import now
 
@@ -465,7 +466,67 @@ class PageParser(HTMLParser):
         if self.in_title: self.title.append(data)
         elif not self.skip: self.text.append(data)
     def result(self):
-        return (' '.join(''.join(self.title).split())[:300], '\n'.join(line.strip() for line in ''.join(self.text).splitlines() if line.strip()))
+        raw_title = ' '.join(''.join(self.title).split())[:300]
+        raw_body = '\n'.join(line.strip() for line in ''.join(self.text).splitlines() if line.strip())
+        return clean_boilerplate(raw_title, raw_body)
+
+_NOISE_LINES = {
+    'skip to main content', 'skip to content', 'home', 'beranda', 'tentang kami',
+    'cari', 'search', 'id', 'indonesia', 'english', 'en', 'in', 'menu',
+    'peraturan detail', 'peraturan', 'dasar hukum', 'sejarah', 'visi misi',
+    "the .gov means it’s official.", "the .gov means it's official.",
+    "here's how you know", "here’s how you know",
+    'official websites use .gov', 'secure .gov websites use https',
+    'an official website of the united states government',
+}
+_NOISE_PREFIXES = (
+    'federal government websites often end in .gov or .mil.',
+    'before sharing sensitive information, make sure you’re on a federal government site.',
+    "before sharing sensitive information, make sure you're on a federal government site.",
+    'a .gov website belongs to an official government organization in the united states.',
+    'a lock (', 'https:// means you’ve safely connected to the .gov website.',
+    "https:// means you've safely connected to the .gov website.",
+    'share sensitive information only on official, secure websites.',
+    'the site is secure.', 'the https:// ensures that you are connecting to the official website',
+    'langsung ke konten utama', 'kuesioner survei kepuasan masyarakat', 'undefined/undefined',
+    'bantu kami memperbaiki sistem pelayanan', 'tutup',
+)
+
+def clean_boilerplate(title, body):
+    lines = [line.strip() for line in (body or '').splitlines() if line.strip()]
+    # Strip leading boilerplate/navigation lines (only within the first 20 lines)
+    cleaned = []
+    for idx, line in enumerate(lines):
+        low = line.lower()
+        if idx < 20 and (low in _NOISE_LINES or any(low.startswith(pref) for pref in _NOISE_PREFIXES)):
+            continue
+        if cleaned and idx < 15 and low == cleaned[-1].lower():
+            continue
+        cleaned.append(line)
+    body_out = '\n'.join(cleaned) if cleaned else (body or '').strip()
+
+    t = (title or '').strip()
+    prefix = ''
+    m = re.match(r'^(［网页存档[^］]+］)\s*(.*)$', t)
+    if m:
+        prefix, core = m.group(1), m.group(2).strip()
+    else:
+        core = t
+    # If core title is just a number, URL, or overly generic stub, enrich from the first meaningful body line
+    if re.fullmatch(r'\d+', core) or core.startswith(('http://', 'https://')) or core.lower() in ('', 'direktori putusan', 'produk hukum'):
+        candidate = ''
+        for line in cleaned[:10]:
+            if len(line) >= 12 and not line.startswith(('http://', 'https://')) and line.lower() not in _NOISE_LINES:
+                candidate = line[:160]
+                break
+        if candidate:
+            if core and not core.startswith(('http://', 'https://')) and core.lower() not in candidate.lower():
+                core = f'{core} · {candidate}'
+            else:
+                core = candidate
+    title_out = f'{prefix}{core}'[:240] if prefix else core[:240]
+    return title_out or t[:240], body_out
+
 
 # Free official APIs used instead of crawling sites that block crawlers or hide content behind scripts.
 # Each connector returns (url, title, body, date, raw, content_type) tuples and honours the API host's robots.txt.
@@ -646,6 +707,7 @@ class SourceInput(BaseModel):
     auto_import: str = 'none'
     auto_analyze: bool = False
     category: str = Field(default='',max_length=60)
+    target_company_id: int | None = None
 
 class SourceBatchItem(BaseModel):
     name: str = Field(min_length=1,max_length=100)
@@ -674,6 +736,7 @@ class ImportInput(BaseModel):
     page_ids: list[int] = Field(min_length=1,max_length=20)
     kind: str = 'knowledge'
     analyze: bool = False
+    company_id: int | None = None
 
 def initialize(store):
     with store.db() as db:
@@ -684,9 +747,9 @@ def initialize(store):
         CREATE TABLE IF NOT EXISTS web_fetch_errors(id INTEGER PRIMARY KEY,run_id INTEGER NOT NULL,url TEXT NOT NULL,error TEXT NOT NULL);
         ''')
         columns={row['name'] for row in db.execute('PRAGMA table_info(web_sources)')}
-        for column,ddl in (('category',"TEXT NOT NULL DEFAULT ''"),('enabled','INTEGER NOT NULL DEFAULT 1'),('deleted_at','TEXT')):
+        for column,ddl in (('category',"TEXT NOT NULL DEFAULT ''"),('enabled','INTEGER NOT NULL DEFAULT 1'),('deleted_at','TEXT'),('target_company_id','INTEGER DEFAULT NULL')):
             if column not in columns: db.execute('ALTER TABLE web_sources ADD COLUMN '+column+' '+ddl)
-        for table,column,ddl in (('web_pages','method',"TEXT NOT NULL DEFAULT ''"),('web_runs','stage',"TEXT NOT NULL DEFAULT ''")):
+        for table,column,ddl in (('web_pages','method',"TEXT NOT NULL DEFAULT ''"),('web_pages','archived_at',"TEXT NOT NULL DEFAULT ''"),('web_runs','stage',"TEXT NOT NULL DEFAULT ''")):
             if column not in {row['name'] for row in db.execute(f'PRAGMA table_info({table})')}: db.execute(f'ALTER TABLE {table} ADD COLUMN {column} {ddl}')
         db.execute("UPDATE web_runs SET status='failed',error='服务重启，采集已中断，请重新检索。',finished_at=? WHERE status='running'",(now(),))
 
@@ -699,10 +762,15 @@ def queue_run(store,source,batch=''):
         db.execute('UPDATE web_sources SET next_run=? WHERE id=?',(time.time()+max(1,source['interval_hours'])*3600,source['id']))
         return run_id
 
-def transfer(store,settings,page_ids,kind,analyze=False):
+def transfer(store,settings,page_ids,kind,analyze=False,company_id=None):
     if kind not in ('knowledge','event','both'): raise ValueError('入库用途无效。')
     if analyze and kind=='knowledge': raise ValueError('知识库参考资料不直接进行风险分析。')
     if analyze and (not settings.configured or not store.setting('rules')['confirmed']): raise ValueError('请先配置模型并确认风险规则，再启动分析。')
+    if kind in ('event','both'):
+        if not company_id:
+            raise ValueError('请选择风险资料归属的公司。')
+        if not store.one('SELECT id FROM companies WHERE id=?',(company_id,)):
+            raise ValueError('风险资料归属的公司不存在。')
     pages=[]
     for page_id in dict.fromkeys(page_ids):
         page=store.one('SELECT p.*,r.config_json,r.status FROM web_pages p JOIN web_runs r ON r.id=p.run_id WHERE p.id=?',(page_id,))
@@ -714,7 +782,23 @@ def transfer(store,settings,page_ids,kind,analyze=False):
     for page,source in pages:
         imports=json.loads(page['imports_json'])
         for target in (['knowledge','event'] if kind=='both' else [kind]):
-            doc_id,created=insert_document(store,{'title':page['title'],'body':page['body'],'url':page['url'],'source':source['name'],'date':normal_date(page['date'])},target,bool(source['allow_external']),file_path=page['snapshot'],filename='website-snapshot'+Path(page['snapshot']).suffix)
+            page_date=normal_date(page['date'])
+            archived_at=page.get('archived_at') or ''
+            if not archived_at:
+                match=re.match(r'^［网页存档\s+(\d{4}-\d{2}-\d{2})］',page['title'] or '')
+                archived_at=match.group(1) if match else ''
+            meta={
+                'date_source':({'rss':'feed','api':'api'}.get(page.get('method') or '','page_meta') if page_date else ''),
+                'archived_at':archived_at,
+                'fetched_at':page.get('fetched_at') or '',
+            }
+            target_company=company_id if target=='event' else None
+            doc_id,created=insert_document(
+                store,
+                {'title':page['title'],'body':page['body'],'url':page['url'],'source':source['name'],'date':page_date},
+                target,bool(source['allow_external']),file_path=page['snapshot'],
+                filename='website-snapshot'+Path(page['snapshot']).suffix,company_id=target_company,meta=meta,
+            )
             imports[target]=doc_id
             job_id=None
             if analyze and target=='event':
@@ -722,10 +806,11 @@ def transfer(store,settings,page_ids,kind,analyze=False):
                     active=db.execute("SELECT id FROM jobs WHERE document_id=? AND status IN ('queued','running')",(doc_id,)).fetchone()
                     prior=db.execute('SELECT id FROM analyses WHERE document_id=?',(doc_id,)).fetchone()
                     if active: job_id=active['id']
-                    elif not prior: job_id=db.execute("INSERT INTO jobs(document_id,status,created_at,company_json) VALUES (?,'queued',?,?)",(doc_id,now(),companies.snapshot(store))).lastrowid
+                    elif not prior: job_id=db.execute("INSERT INTO jobs(document_id,status,created_at,company_json) VALUES (?,'queued',?,?)",(doc_id,now(),companies.snapshot(store,company_id))).lastrowid
             result.append({'page_id':page['id'],'kind':target,'id':doc_id,'created':created,'job_id':job_id})
         with store.db() as db: db.execute('UPDATE web_pages SET imports_json=? WHERE id=?',(json.dumps(imports),page['id']))
-    store.audit('website_imported',f'count={len(result)}')
+    owner=company_id if kind in ('event','both') else None
+    store.audit('website_imported',f'count={len(result)}, kind={kind}, company={owner}',company_id=owner)
     return {'items':result}
 
 class Collector:
@@ -761,7 +846,7 @@ class Collector:
             if item['relevant'] and (len(quote)<6 or loose(quote) not in loose(snippets[item['id']])): continue
             verdicts[item['id']]=(item['relevant'],reason,quote)
         return verdicts
-    def keep(self,run_id,pages,url,title,body,date,raw,ctype,method='direct'):
+    def keep(self,run_id,pages,url,title,body,date,raw,ctype,method='direct',archived=''):
         """Store one page (immutable snapshot + text). False when its text duplicates a page already kept."""
         if len(body)>MAX_BODY: body=body[:MAX_BODY-len(TRUNCATED)]+TRUNCATED
         digest=hashlib.sha256(body.encode()).hexdigest()
@@ -771,7 +856,13 @@ class Collector:
         snapshot='web-'+str(run_id)+'-'+hashlib.sha256(url.encode()).hexdigest()[:12]+'-'+hashlib.sha256(raw).hexdigest()[:16]+ext
         (self.store.directory/'uploads'/snapshot).write_bytes(raw)
         with self.store.db() as db:
-            page_id=db.execute('INSERT INTO web_pages(run_id,url,title,body,date,fetched_at,digest,snapshot,method) VALUES (?,?,?,?,?,?,?,?,?)',(run_id,url,title[:230],body,normal_date(date),now(),digest,snapshot,method)).lastrowid
+            if not archived:
+                match=re.match(r'^［网页存档\s+(\d{4}-\d{2}-\d{2})］',title or '')
+                archived=match.group(1) if match else ''
+            page_id=db.execute(
+                'INSERT INTO web_pages(run_id,url,title,body,date,fetched_at,digest,snapshot,method,archived_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                (run_id,url,title[:230],body,normal_date(date),now(),digest,snapshot,method,archived),
+            ).lastrowid
         page={'id':page_id,'title':title[:230],'body':body,'url':url,'digest':digest}
         # Same source, same keywords, byte-identical text already judged in an earlier run: reuse that verdict
         # instead of paying for the model again.
@@ -859,7 +950,7 @@ class Collector:
                     if archived and CHALLENGE.search(title+' '+body[:500]): raise ValueError('网页存档中保存的也是人机验证页面。')
                     title=(('［网页存档 '+archived+'］') if archived else '')+(title or final)
                     if 'html' in ctype.lower() and navigation_page(final,parser,body): navs.append((final,title,body,parser.date,raw,ctype,how))
-                    elif not self.keep(run_id,pages,final,title,body,parser.date,raw,ctype,how): continue
+                    elif not self.keep(run_id,pages,final,title,body,parser.date,raw,ctype,how,archived=archived): continue
                     for href in parser.links:
                         try: link=clean_url(urljoin(final,href))
                         except ValueError:continue
@@ -900,16 +991,25 @@ class Collector:
                 with store.db() as db: db.execute('UPDATE web_runs SET error=? WHERE id=?',(f'{unjudged} 个页面 AI 未给出可核验的判定，未参与自动入库，可查看原文后人工处理。',run_id))
             if self.cancelled(run_id):return
             with store.db() as db: db.execute("UPDATE web_runs SET status='completed',finished_at=?,model=?,usage_json=? WHERE id=? AND status='running'",(now(),self.settings.model_name,json.dumps(usage),run_id))
-            if source['auto_import']!='none':
+            auto_kind=source['auto_import']
+            target_company=source.get('target_company_id')
+            if auto_kind in ('event','both') and not target_company:
+                auto_kind='knowledge' if auto_kind=='both' else 'none'
+                with store.db() as db:
+                    db.execute(
+                        "UPDATE web_runs SET error=CASE WHEN error='' THEN ? ELSE error||'；'||? END WHERE id=?",
+                        ('未指定风险资料归属公司，本次未自动保存风险资料。',)*2+(run_id,),
+                    )
+            if auto_kind!='none':
                 relevant=store.rows('SELECT id FROM web_pages WHERE run_id=? AND relevant=1',(run_id,))
-                if relevant: transfer(store,self.settings,[p['id'] for p in relevant],source['auto_import'],bool(source['auto_analyze']))
+                if relevant: transfer(store,self.settings,[p['id'] for p in relevant],auto_kind,bool(source['auto_analyze']),company_id=target_company if auto_kind in ('event','both') else None)
             store.audit('website_searched',f'id={run_id}, count={len(pages)}')
         except Exception as error:
             message=str(error) if isinstance(error,ValueError) else '采集异常：'+type(error).__name__
             with store.db() as db: db.execute("UPDATE web_runs SET status='failed',error=?,finished_at=? WHERE id=? AND status!='cancelled'",(message,now(),run_id))
 
 def router(store,settings):
-    api=APIRouter(prefix='/api/web')
+    api=APIRouter(prefix='/api/web',dependencies=[Depends(admin_only)])
     def main_reason(run_id,error):
         """Plain-language reason for a run; a run with no text at all is explained by its most common page error."""
         if run_id and '未采集到可检索正文' in (error or ''):
@@ -981,15 +1081,19 @@ def router(store,settings):
         if not value['name'].strip() or not value['keywords'].strip():raise ValueError('网站名称与关键词不能为空。')
         if value['auto_import'] not in ('none','knowledge','event','both'): raise ValueError('自动入库用途无效。')
         if value['auto_analyze'] and value['auto_import'] not in ('event','both'): raise ValueError('自动分析需同时保存为风险资料。')
+        if value['auto_import'] in ('event','both') and not value['target_company_id']:
+            raise ValueError('自动保存风险资料时必须选择归属公司。')
+        if value['target_company_id'] and not store.one('SELECT id FROM companies WHERE id=?',(value['target_company_id'],)):
+            raise ValueError('风险资料归属公司不存在。')
         if value['interval_hours'] and not value['allow_external']:raise ValueError('定时AI检索需要网站外发授权。')
         if value['auto_analyze'] and not store.setting('rules')['confirmed']:raise ValueError('自动分析需先确认风险规则。')
         with store.db() as db:
-            values=(value['name'].strip(),value['url'],value['keywords'].strip(),value['max_pages'],value['interval_hours'],int(value['allow_external']),value['auto_import'],int(value['auto_analyze']),time.time()+value['interval_hours']*3600,value['category'].strip())
+            values=(value['name'].strip(),value['url'],value['keywords'].strip(),value['max_pages'],value['interval_hours'],int(value['allow_external']),value['auto_import'],int(value['auto_analyze']),time.time()+value['interval_hours']*3600,value['category'].strip(),value['target_company_id'])
             if source_id is None:
-                source_id=db.execute('INSERT INTO web_sources(name,url,keywords,max_pages,interval_hours,allow_external,auto_import,auto_analyze,next_run,category,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',values+(now(),)).lastrowid
+                source_id=db.execute('INSERT INTO web_sources(name,url,keywords,max_pages,interval_hours,allow_external,auto_import,auto_analyze,next_run,category,target_company_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',values+(now(),)).lastrowid
             else:
                 if db.execute("SELECT id FROM web_runs WHERE source_id=? AND status IN ('queued','running')",(source_id,)).fetchone():raise ValueError('请等待当前检索结束或取消任务后再修改网站。')
-                if not db.execute('UPDATE web_sources SET name=?,url=?,keywords=?,max_pages=?,interval_hours=?,allow_external=?,auto_import=?,auto_analyze=?,next_run=?,category=? WHERE id=? AND deleted_at IS NULL',values+(source_id,)).rowcount:raise HTTPException(404,'网站不存在。')
+                if not db.execute('UPDATE web_sources SET name=?,url=?,keywords=?,max_pages=?,interval_hours=?,allow_external=?,auto_import=?,auto_analyze=?,next_run=?,category=?,target_company_id=? WHERE id=? AND deleted_at IS NULL',values+(source_id,)).rowcount:raise HTTPException(404,'网站不存在。')
         store.audit('website_configured',f'id={source_id}')
         return {'id':source_id}
     @api.post('/sources/{source_id}/pause')
@@ -1021,9 +1125,22 @@ def router(store,settings):
         store.audit('website_group_cancelled',f'category={data.batch.rsplit("@",1)[0]}, count={count}')
         return {'cancelled':count}
     @api.get('/discoveries')
-    def discoveries(limit:int=5):
-        """Latest relevant pages for the overview, newest first."""
-        rows=store.rows("SELECT p.id,p.title,p.url,p.date,p.reason,p.imports_json,p.fetched_at,r.id run_id,s.name source FROM web_pages p JOIN web_runs r ON r.id=p.run_id JOIN web_sources s ON s.id=r.source_id WHERE p.relevant=1 AND r.status='completed' ORDER BY p.id DESC LIMIT ?",(max(1,min(limit,20)),))
+    def discoveries(limit:int=5, q:str='', category:str='', imported:str=''):
+        """Latest relevant pages for the overview or filtered discovery search, newest first."""
+        where="p.relevant=1 AND r.status='completed'"
+        args=[]
+        if q.strip():
+            where+=" AND (p.title LIKE ? OR p.reason LIKE ? OR p.url LIKE ? OR s.name LIKE ?)"
+            args+=['%'+q.strip()+'%']*4
+        if category.strip():
+            where+=" AND s.category=?"
+            args.append(category.strip())
+        if imported=='yes':
+            where+=" AND p.imports_json!='{}'"
+        elif imported=='no':
+            where+=" AND p.imports_json='{}'"
+        cap=max(1,min(limit,200))
+        rows=store.rows(f"SELECT p.id,p.title,p.url,p.date,p.reason,p.imports_json,p.fetched_at,r.id run_id,s.name source,s.category category FROM web_pages p JOIN web_runs r ON r.id=p.run_id JOIN web_sources s ON s.id=r.source_id WHERE {where} ORDER BY p.id DESC LIMIT ?",tuple(args+[cap]))
         for row in rows: row['imports']=json.loads(row.pop('imports_json'))
         return {'items':rows}
     @api.get('/runs/{run_id}')
@@ -1031,7 +1148,7 @@ def router(store,settings):
         run=store.one('SELECT * FROM web_runs WHERE id=?',(run_id,))
         if not run:raise HTTPException(404,'检索任务不存在。')
         run['config']=json.loads(run.pop('config_json'));run['usage']=json.loads(run.pop('usage_json'))
-        run['items']=store.rows('SELECT id,url,title,date,fetched_at,relevant,reason,quote,imports_json,method,body FROM web_pages WHERE run_id=?',(run_id,))
+        run['items']=store.rows('SELECT id,url,title,date,archived_at,fetched_at,relevant,reason,quote,imports_json,method,body FROM web_pages WHERE run_id=?',(run_id,))
         for item in run['items']:
             item['imports']=json.loads(item.pop('imports_json'));body=item.pop('body');item['characters']=len(body)
             if not item['method']: item['method']='archive' if item['title'].startswith('［网页存档') else 'direct'
@@ -1063,9 +1180,15 @@ def router(store,settings):
         return {'id':run_id}
     @api.get('/pages/{page_id}')
     def page(page_id:int):
-        page=store.one('SELECT id,title,url,body,date,fetched_at FROM web_pages WHERE id=?',(page_id,))
+        page=store.one('SELECT id,title,url,body,date,archived_at,fetched_at,method FROM web_pages WHERE id=?',(page_id,))
         if not page:raise HTTPException(404,'网页不存在。')
+        if not page['method']: page['method']='archive' if page['title'].startswith('［网页存档') else 'direct'
+        if not page['archived_at']:
+            match=re.match(r'^［网页存档\s+(\d{4}-\d{2}-\d{2})］',page['title'] or '')
+            page['archived_at']=match.group(1) if match else ''
         return page
     @api.post('/import')
-    def ingest(data:ImportInput): return transfer(store,settings,data.page_ids,data.kind,data.analyze)
+    def ingest(data:ImportInput,request:Request):
+        company_id=(data.company_id or session_company(request)) if data.kind in ('event','both') else None
+        return transfer(store,settings,data.page_ids,data.kind,data.analyze,company_id=company_id)
     return api

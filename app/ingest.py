@@ -100,15 +100,24 @@ def parse_file(filename, data):
         raise ValueError('支持 .csv、.xlsx、.docx、文本型 .pdf、.txt 和 .md 文件。')
     return [{'record': {'title': Path(filename).stem, 'body': body}, 'row': 1}]
 
-def insert_document(store, record, kind='event', allow_external=False, demo=False, file_path='', filename=''):
+def insert_document(store, record, kind='event', allow_external=False, demo=False, file_path='', filename='', company_id=None, meta=None):
     r = validate_record(record)
-    digest = hashlib.sha256((kind + '\0' + str(demo) + '\0' + r['title'] + '\0' + r['body']).encode()).hexdigest()
+    meta = meta or {}
+    date_source = (meta.get('date_source') or 'provided') if r['date'] else ''
+    scope_prefix = f'c{company_id}\0' if company_id else ''
+    digest = hashlib.sha256((scope_prefix + kind + '\0' + str(demo) + '\0' + r['title'] + '\0' + r['body']).encode()).hexdigest()
     with store.db() as db:
         existing = db.execute('SELECT id FROM documents WHERE digest=?', (digest,)).fetchone()
         if existing:
             return existing['id'], False
-        doc_id = db.execute('''INSERT INTO documents(title,date,source,url,body,kind,allow_external,demo,digest,file_path,filename,created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''', (r['title'],r['date'],r['source'],r['url'],r['body'],kind,int(allow_external),int(demo),digest,file_path,filename,now())).lastrowid
+        doc_id = db.execute('''INSERT INTO documents(
+                title,date,source,url,body,kind,allow_external,demo,digest,file_path,filename,created_at,company_id,
+                date_source,archived_at,fetched_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', (
+                r['title'], r['date'], r['source'], r['url'], r['body'], kind, int(allow_external),
+                int(demo), digest, file_path, filename, now(), company_id, date_source,
+                str(meta.get('archived_at') or ''), str(meta.get('fetched_at') or ''),
+            )).lastrowid
         for locator, content in chunks_for(r['body']):
             db.execute('INSERT INTO chunks(document_id,locator,text) VALUES (?,?,?)', (doc_id,locator,content))
         return doc_id, True
