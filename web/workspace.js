@@ -5,7 +5,8 @@ const previewDrafts=new Map();
 const mobileWorkspace=window.matchMedia('(max-width:700px)');
 function sizeInspection(){
   const panel=$('.inspection-panel');if(!panel||panel.hidden)return;
-  panel.style.setProperty('--inspection-height',`${Math.max(360,innerHeight-Math.max(20,panel.getBoundingClientRect().top)-20)}px`);
+  if(innerWidth>=1001&&panel.getBoundingClientRect().top>132)panel.scrollIntoView({block:'start',behavior:'instant'});
+  panel.style.setProperty('--inspection-height',`${Math.max(360,innerHeight-132)}px`);
 }
 window.addEventListener('resize',sizeInspection);
 function syncNavigation(){
@@ -62,7 +63,7 @@ function composeWorkspace(route,html){
   const network=route==='overview'?root.querySelector('.network-panel:not(.is-standby)'):null;
   if(network){
     const heading=network.querySelector('.panel-heading');
-    const rankFirst=mobileWorkspace.matches;
+    const rankFirst=false;
     heading.querySelector('small').remove();
     heading.insertAdjacentHTML('beforeend',`<div class="chart-switch" role="group" aria-label="风险分布展示方式"><button type="button" data-chart-view="network" aria-pressed="${!rankFirst}">分布图</button><button type="button" data-chart-view="rank" aria-pressed="${rankFirst}">分类排行</button></div>`);
     const ranks=document.createElement('div');ranks.className='category-ranking';ranks.hidden=!rankFirst;
@@ -233,6 +234,7 @@ async function openInspection(id){
   const panel=$('.inspection-panel');if(!panel)return;
   const request=++previewRequest;
   panel.hidden=false;panel.closest('.verification-workspace').classList.add('has-inspection');
+  panel.closest('.verification-workspace').scrollIntoView({block:'start',behavior:'instant'});
   sizeInspection();
   panel.innerHTML='<div class="loading" role="status">正在读取事件与证据…</div>';
   $$('[data-preview]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.preview===id)));
@@ -276,7 +278,7 @@ async function openInspection(id){
       }catch(err){if(form.isConnected)$('#inspection-feedback',panel).innerHTML=errorBox(err.message);}
       finally{if(button.isConnected){button.disabled=false;$$('input,select,textarea',form).forEach(control=>control.disabled=false);}}
     };
-    if(matchMedia('(max-width: 1100px)').matches)panel.scrollIntoView({block:'start'});
+    if(matchMedia('(max-width: 1100px)').matches)panel.scrollIntoView({block:'start',behavior:'instant'});
   }catch(err){if(request===previewRequest&&panel.isConnected)panel.innerHTML=errorBox(err.message)+'<button class="secondary" data-retry-inspection>重新读取</button>';const retry=$('[data-retry-inspection]',panel);if(retry)retry.onclick=()=>openInspection(id);}
 }
 function bindWorkspace(){

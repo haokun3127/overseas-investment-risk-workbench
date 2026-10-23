@@ -122,7 +122,7 @@ def create_app(settings=None, run_worker=True):
                     return JSONResponse({'detail':'上传内容超过10MB限制。'},status_code=413)
             except ValueError:
                 return JSONResponse({'detail':'无效请求长度。'},status_code=400)
-        public={'/api/auth/status','/api/auth/setup','/api/auth/login','/api/auth/register','/api/health'}
+        public={'/api/auth/status','/api/auth/setup','/api/auth/login','/api/auth/register','/api/health','/api/release'}
         if path.startswith('/api/') and path not in public:
             token=request.cookies.get(settings.session_cookie_name,'')
             key=hashlib.sha256(token.encode()).hexdigest()
@@ -149,6 +149,10 @@ def create_app(settings=None, run_worker=True):
     @app.exception_handler(ValueError)
     async def value_error(request,error):
         return JSONResponse({'detail':str(error)},status_code=400)
+
+    @app.get('/api/release')
+    def release():
+        return JSONResponse({'version':'20261024-workflow1'},headers={'Cache-Control':'no-store'})
 
     @app.get('/api/health')
     def health(): return {'status':'ok'}
@@ -717,5 +721,5 @@ def create_app(settings=None, run_worker=True):
 
     app.mount('/static',StaticFiles(directory=ROOT/'web'),name='static')
     @app.get('/')
-    def home(): return FileResponse(ROOT/'web'/'index.html')
+    def home(): return FileResponse(ROOT/'web'/'index.html',headers={'Cache-Control':'no-cache'})
     return app

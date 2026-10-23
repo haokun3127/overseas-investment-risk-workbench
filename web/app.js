@@ -38,7 +38,7 @@ function icon(name){return `<svg class="icon" aria-hidden="true"><use href="#i-$
 const eyebrows={风险事件:'RISK LEDGER · 逐条核验',资料与分析:'INTAKE · 资料研判',知识库:'ARCHIVE · 法规与案例',网站检索:'WATCH · 公开来源采集',风险简报:'BRIEFING · 对外简报',模型与规则:'CONFIG · 模型与规则',分析任务:'QUEUE · 后台任务'};
 function stamp(){return new Date().toLocaleString('zh-CN',{hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});}
 function heading(title,subtitle,actions=''){
-  const eyebrow=title==='风险总览'?`INDONESIA · 海外投资风险研判 · 数据截至 ${stamp()}`:(eyebrows[title]||'WORKBENCH');
+  const eyebrow=title==='风险总览'?`INDONESIA · 海外投资风险研判 · 页面刷新 ${stamp()}`:(eyebrows[title]||'WORKBENCH');
   return `<div class="page-heading"><div><div class="page-eyebrow"><span class="label-dot" aria-hidden="true"></span>${eyebrow}</div><h1>${title}</h1><p>${subtitle}</p></div><div class="actions">${actions}</div></div>`;
 }
 function scopeValue(){return ['all','real','demo'].includes(state.scope)?state.scope:'all';}
@@ -124,7 +124,7 @@ function updateIdentity() {
     return;
   }
   const background = state.company?.name || '未选择';
-  userMark.textContent = `管理员 · 背景：${background}`;
+  userMark.textContent = '系统管理员';
   userMark.title = `当前登录身份：系统管理员；本会话新分析背景：${background}`;
 }
 function demonstration(){return '<p class="demo-note" role="note">当前结果包含标有“演示”的内置虚构数据，不是真实风险。风险简报默认不纳入演示数据；不再需要时可在<a href="#settings">模型与规则</a>中一键清除。</p>';}
@@ -438,6 +438,7 @@ async function boot(){
 async function render(options={}){
   if($('#shell').hidden)return;
   const previousScroll=window.scrollY;
+  const routeChanged=state.routeKey!==location.hash;
   const renderId=++state.renderId;
   const [routePath,routeSearch='']=location.hash.slice(1).split('?');
   const parts=routePath.split('/');
@@ -455,6 +456,7 @@ async function render(options={}){
       state.ki=Math.max(0,parseInt(params.get('ki'),10)||0);
     }
   }
+  if(routeChanged&&route==='websites'){webFilter.status=new URLSearchParams(routeSearch).get('status')||'';webFilter.page=1;}
   state.routeKey=location.hash;
   state.route=route;
   document.body.dataset.route = route;
@@ -481,11 +483,13 @@ async function render(options={}){
     else html=empty('页面不存在','请从左侧导航选择工作区。','<a href="#overview" class="primary">返回总览</a>');
     if(renderId!==state.renderId)return;
     html=await enhanceView(route,html);
-    if(route==='overview'){const host=document.createElement('div');host.innerHTML=html;host.querySelector('[data-company-host]').innerHTML=companyPanel({compact:true});html=host.innerHTML;}
+    if(route==='overview'){const host=document.createElement('div');host.innerHTML=html;host.querySelector('[data-company-host]').innerHTML=companyContext();html=host.innerHTML;}
     if(renderId!==state.renderId)return;
     $('#main').innerHTML=`<div class="route-enter">${composeWorkspace(route,html)}</div>`;bind();bindFeatures();bindWorkflows();bindKnowledgeReader();bindWorkspace();bindWebsite();bindCompanies();
     window.Motion?.enter(route,{quiet:options.quiet});
     if(options.quiet)window.scrollTo(0,previousScroll);
+    else if(routeChanged)window.scrollTo({top:0,behavior:'instant'});
+    bindOperations();
   }catch(e){if(renderId===state.renderId)$('#main').innerHTML=errorBox(e.message)+'<button class="secondary" id="retry-page">重新加载</button>';$('#retry-page')?.addEventListener('click',render);}
 }
 // Empty overview: the map slot becomes a standby card whose single action follows the workspace's real state.
@@ -529,6 +533,7 @@ async function overview(){
   const [stats,data,workspace]=await Promise.all([api(`/overview?demo=${scopeValue()}`),api(`/events?demo=${scopeValue()}`),api('/workspace').catch(()=>null)]);
   state.overviewScope=stats.scope||null;
   state.overviewWorkspace=workspace;
+  state.collectionHealth=state.auth?.role==='admin'?await api('/web/health').catch(()=>null):null;
   const isEmpty=stats.total===0;
   const pending=Math.min(workspace?.unanalyzed||0,stats.documents||0);
   const count=Object.fromEntries(stats.levels.map(v=>[v.level,v.count]));
@@ -552,11 +557,12 @@ async function overview(){
     : `<section class="panel network-panel"><div class="panel-heading"><h2>${icon('overview')}风险类型分布</h2><small>基于当前资料</small></div>${categoryNetwork(stats)}</section>${rightRail}`;
   return heading('风险总览','从风险信号到判断依据，让每一次分析可核验。',`<button class="secondary icon-button" data-refresh aria-label="刷新总览">${icon('refresh')}</button><a class="secondary" href="#events">查看全部事件</a>${primary}`)
     +'<div data-company-host></div>'
-    +scope()
+    +overviewScope()
     +rulesAlert()
     +(state.scope!=='real'&&recent.some(e=>e.demo)?demonstration():'')
     +`<section class="stats kpi-strip" aria-label="风险统计">${kpis}</section>`
     +`<div class="analysis-board overview-bento${isEmpty?' is-empty':''}">${board}</div>`
+    +collectionHealth(state.collectionHealth)
     +`<section class="panel events-panel"><div class="panel-heading"><h2>${icon('risk')}最新风险事件</h2><a class="panel-link" href="${eventHref()}">全部事件 ${icon('arrow')}</a></div>${recent.length?tableEvents(recent,true):`<p class="events-empty">${icon('risk')}<span><strong>暂无风险事件</strong><span>分析完成后，最新 6 条会显示在这里</span></span><a class="text-button" href="#documents">查看资料队列${icon('arrow')}</a></p>`}</section>`;
 }
 async function eventList(){

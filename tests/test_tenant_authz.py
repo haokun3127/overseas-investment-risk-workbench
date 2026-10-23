@@ -105,6 +105,7 @@ def test_admin_can_call_admin_endpoints(admin):
 
 
 WEB_ROUTES = [
+    ('get', '/api/web/health'),
     ('get', '/api/web/sources'), ('post', '/api/web/sources/import'), ('post', '/api/web/sources/1/toggle'),
     ('delete', '/api/web/sources/1'), ('post', '/api/web/runs/group'), ('post', '/api/web/sources'),
     ('put', '/api/web/sources/1'), ('post', '/api/web/sources/1/pause'), ('post', '/api/web/runs'),

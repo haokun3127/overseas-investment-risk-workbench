@@ -1008,6 +1008,18 @@ class Collector:
             message=str(error) if isinstance(error,ValueError) else '采集异常：'+type(error).__name__
             with store.db() as db: db.execute("UPDATE web_runs SET status='failed',error=?,finished_at=? WHERE id=? AND status!='cancelled'",(message,now(),run_id))
 
+def group_order(name):
+    match=re.match(r'^([一二三四五六七八九十百零〇\d]+)[、.．\s]',name or '')
+    if not match:return (10000,name or '')
+    value=match.group(1)
+    if value.isdigit():return (int(value),name)
+    digits={'一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9}
+    if '十' in value:
+        a,b=value.split('十',1);number=(digits.get(a,1)*10)+digits.get(b,0)
+    else:number=digits.get(value,10000)
+    return (number,name)
+
+
 def router(store,settings):
     api=APIRouter(prefix='/api/web',dependencies=[Depends(admin_only)])
     def main_reason(run_id,error):
@@ -1016,12 +1028,35 @@ def router(store,settings):
             hints=[error_hint(e['error']) or e['error'] for e in store.rows('SELECT error FROM web_fetch_errors WHERE run_id=? ORDER BY id',(run_id,))]
             if hints: return max(dict.fromkeys(hints),key=hints.count)
         return error_hint(error)
+    @api.get('/health')
+    def collection_health():
+        summary=store.one("SELECT count(*) total,sum(enabled=1) enabled,sum(enabled=1 AND interval_hours>0) scheduled,sum(enabled=1 AND interval_hours=0) manual FROM web_sources WHERE deleted_at IS NULL")
+        latest="SELECT max(id) FROM web_runs GROUP BY source_id"
+        summary['latest_failed']=store.one("SELECT count(*) n FROM web_sources s JOIN web_runs r ON r.source_id=s.id WHERE s.deleted_at IS NULL AND s.enabled=1 AND r.id IN ("+latest+") AND r.status='failed'")['n']
+        summary['unrun']=store.one("SELECT count(*) n FROM web_sources WHERE deleted_at IS NULL AND enabled=1 AND id NOT IN (SELECT source_id FROM web_runs)")['n']
+        summary['undecided']=store.one("SELECT count(DISTINCT r.source_id) n FROM web_runs r JOIN web_sources s ON s.id=r.source_id JOIN web_pages p ON p.run_id=r.id WHERE s.deleted_at IS NULL AND r.status='completed' AND p.relevant IS NULL AND r.id IN ("+latest+")")['n']
+        summary['active']=store.one("SELECT count(*) n FROM web_runs WHERE status IN ('queued','running')")['n']
+        summary['last_success']=store.one("SELECT max(r.finished_at) at FROM web_runs r JOIN web_sources s ON s.id=r.source_id WHERE s.deleted_at IS NULL AND r.status='completed'")['at']
+        summary['last_analysis']=store.one("SELECT max(created_at) at FROM analyses")['at']
+        return {k:(v or 0) if k not in ('last_success','last_analysis') else v for k,v in summary.items()}
+
     @api.get('/sources')
-    def sources(q:str='',category:str='',page:int=1,size:int=30):
+    def sources(q:str='',category:str='',status:str='',page:int=1,size:int=30):
         size=max(1,min(size,100));page=max(1,page)
         where='deleted_at IS NULL';args=[]
         if q.strip(): where+=" AND (name LIKE ? OR url LIKE ? OR keywords LIKE ?)";args+=['%'+q.strip()+'%']*3
         if category: where+=' AND category=?';args.append(category)
+        filters={
+            'unrun':"enabled=1 AND id NOT IN (SELECT source_id FROM web_runs)",
+            'failed':"enabled=1 AND id IN (SELECT source_id FROM web_runs WHERE status='failed' AND id IN (SELECT max(id) FROM web_runs GROUP BY source_id))",
+            'completed':"id IN (SELECT source_id FROM web_runs WHERE status='completed' AND id IN (SELECT max(id) FROM web_runs GROUP BY source_id))",
+            'active':"id IN (SELECT source_id FROM web_runs WHERE status IN ('queued','running'))",
+            'scheduled':"enabled=1 AND interval_hours>0",'manual':"enabled=1 AND interval_hours=0",'disabled':"enabled=0",
+            'undecided':"id IN (SELECT r.source_id FROM web_runs r JOIN web_pages p ON p.run_id=r.id WHERE r.status='completed' AND p.relevant IS NULL AND r.id IN (SELECT max(id) FROM web_runs GROUP BY source_id))"
+        }
+        if status:
+            if status not in filters:raise HTTPException(400,'网站状态筛选无效。')
+            where+=' AND '+filters[status]
         total=store.one('SELECT count(*) n FROM web_sources WHERE '+where,tuple(args))['n']
         items=store.rows('''SELECT s.*,
             (SELECT status FROM web_runs r WHERE r.source_id=s.id ORDER BY r.id DESC LIMIT 1) last_status,
@@ -1030,9 +1065,10 @@ def router(store,settings):
             (SELECT id FROM web_runs r WHERE r.source_id=s.id ORDER BY r.id DESC LIMIT 1) last_run_id,
             (SELECT count(*) FROM web_runs r WHERE r.source_id=s.id AND r.status IN ('completed','failed')) run_count,
             (SELECT count(*) FROM web_runs r WHERE r.source_id=s.id AND r.status='completed') ok_count
-            FROM web_sources s WHERE '''+where+' ORDER BY s.category, s.id LIMIT ? OFFSET ?',tuple(args+[size,(page-1)*size]))
+            FROM web_sources s WHERE '''+where+" ORDER BY CASE substr(s.category,1,instr(s.category,'、')-1) WHEN '一' THEN 1 WHEN '二' THEN 2 WHEN '三' THEN 3 WHEN '四' THEN 4 WHEN '五' THEN 5 WHEN '六' THEN 6 WHEN '七' THEN 7 WHEN '八' THEN 8 WHEN '九' THEN 9 WHEN '十' THEN 10 WHEN '十一' THEN 11 WHEN '十二' THEN 12 ELSE 10000 END,s.category,s.id LIMIT ? OFFSET ?",tuple(args+[size,(page-1)*size]))
         for item in items: item['last_hint']=main_reason(item['last_run_id'],item['last_error'])
         groups=store.rows("SELECT category name,count(*) count,sum(enabled) enabled FROM web_sources WHERE deleted_at IS NULL GROUP BY category ORDER BY category")
+        groups.sort(key=lambda g:group_order(g['name']))
         return {'items':items,'total':total,'page':page,'size':size,'groups':groups}
     @api.post('/sources/import')
     def batch_import(data:SourceBatch):
@@ -1154,7 +1190,11 @@ def router(store,settings):
             if not item['method']: item['method']='archive' if item['title'].startswith('［网页存档') else 'direct'
             # Same text already saved to the knowledge base, from this or any earlier run (see ingest digest).
             digest=hashlib.sha256(('knowledge\0False\0'+item['title']+'\0'+body).encode()).hexdigest()
-            item['in_knowledge']=bool(item['imports'].get('knowledge') or store.one('SELECT 1 x FROM documents WHERE digest=?',(digest,)))
+            doc=store.one('SELECT id,created_at FROM documents WHERE id=?',(item['imports']['knowledge'],)) if item['imports'].get('knowledge') else store.one('SELECT id,created_at FROM documents WHERE digest=?',(digest,))
+            item['in_knowledge']=bool(doc)
+            item['knowledge_saved_at']=doc['created_at'] if doc else None
+            item['knowledge_document_id']=doc['id'] if doc else None
+            item['knowledge_from_history']=bool(doc and doc['created_at']<run['created_at'])
         run['errors']=store.rows('SELECT url,error FROM web_fetch_errors WHERE run_id=?',(run_id,))
         for error in run['errors']: error['hint']=error_hint(error['error'])
         run['hint']=main_reason(run_id,run['error'])
