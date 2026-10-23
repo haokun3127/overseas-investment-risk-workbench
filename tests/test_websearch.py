@@ -682,7 +682,7 @@ def test_release_is_public_but_collection_health_is_admin_only(web_client):
     anon=TestClient(c.app)
     r=anon.get('/api/release')
     assert r.status_code==200 and r.headers['cache-control']=='no-store'
-    assert r.json()['version']=='20261024-workflow1'
+    assert f'name="app-version" content="{r.json()["version"]}"' in c.get('/').text
     assert anon.get('/').headers['cache-control']=='no-cache'
     assert anon.get('/api/web/health').status_code==401
     registered=c.post('/api/auth/register',json={'username':'health_company','password':'test-password-2026','name':'状态隔离测试公司','allow_external':False})

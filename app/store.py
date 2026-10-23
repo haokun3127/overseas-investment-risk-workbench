@@ -58,6 +58,11 @@ class Store:
             CREATE TABLE IF NOT EXISTS review_history(
                 id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id),
                 status TEXT NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS document_evidence(
+                document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                supplement_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                analysis_id INTEGER NOT NULL REFERENCES analyses(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL, PRIMARY KEY(document_id,supplement_id));
             """)
             columns = {row["name"] for row in db.execute("PRAGMA table_info(documents)")}
             for column, ddl in (
@@ -86,6 +91,18 @@ class Store:
             if "company_id" not in audit_cols:
                 db.execute("ALTER TABLE audit ADD COLUMN company_id INTEGER DEFAULT NULL")
             db.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", ("rules", json.dumps(DEFAULT_RULES, ensure_ascii=False)))
+            job_cols = {row['name'] for row in db.execute('PRAGMA table_info(jobs)')}
+            for column, ddl in (
+                ('rules_json', "TEXT NOT NULL DEFAULT ''"),
+                ('rules_snapshot_origin', "TEXT NOT NULL DEFAULT ''"),
+                ('supplements_json', "TEXT NOT NULL DEFAULT '[]'"),
+                ('parent_analysis_id', 'INTEGER DEFAULT NULL'),
+            ):
+                if column not in job_cols:
+                    db.execute(f'ALTER TABLE jobs ADD COLUMN {column} {ddl}')
+            # Existing queued tasks cannot recover submission-time rules. Freeze once,
+            # explicitly mark the upgrade provenance, and never overwrite a snapshot.
+            db.execute("UPDATE jobs SET rules_json=(SELECT value FROM settings WHERE key='rules'), rules_snapshot_origin='upgrade' WHERE status='queued' AND rules_json='' ")
             db.execute(
                 "UPDATE documents SET date_source=\x27legacy\x27 "
                 "WHERE date!=\x27\x27 AND date_source=\x27\x27"
@@ -109,7 +126,7 @@ class Store:
             return {"documents": 0, "events": 0}
         marks = ",".join("?" * len(ids))
         with self.db() as db:
-            if db.execute(f"SELECT 1 FROM jobs WHERE document_id IN ({marks}) AND status IN (\x27queued\x27,\x27running\x27) LIMIT 1", ids).fetchone():
+            if db.execute(f"SELECT 1 FROM jobs WHERE status IN ('queued','running') AND (document_id IN ({marks}) OR EXISTS(SELECT 1 FROM json_each(jobs.supplements_json) s WHERE json_extract(s.value,'$.document_id') IN ({marks}))) LIMIT 1", ids+ids).fetchone():
                 raise ValueError("资料正在分析，请等待任务结束或取消后再删除。")
             tables = {r["name"] for r in db.execute("SELECT name FROM sqlite_master WHERE type=\x27table\x27")}
             files = [r["file_path"] for r in db.execute(f"SELECT file_path FROM documents WHERE id IN ({marks})", ids) if r["file_path"]]
@@ -165,6 +182,25 @@ class Store:
     def setting(self, key):
         row = self.one("SELECT value FROM settings WHERE key=?", (key,))
         return json.loads(row["value"]) if row else None
+
+    def enqueue_job(self, db, document_id, company_json, supplements=None, parent_analysis_id=None):
+        rules_json = db.execute("SELECT value FROM settings WHERE key='rules'").fetchone()['value']
+        if not json.loads(rules_json)['confirmed']:
+            raise ValueError('请先确认甲方风险分类分级规则。')
+        return db.execute("""INSERT INTO jobs(document_id,status,created_at,company_json,rules_json,
+            rules_snapshot_origin,supplements_json,parent_analysis_id) VALUES (?,'queued',?,?,?,'submission',?,?)""",
+            (document_id,now(),company_json,rules_json,json.dumps(supplements or [],ensure_ascii=False),parent_analysis_id)).lastrowid
+
+    def supplement_snapshot(self, db, document_id):
+        docs = db.execute('''SELECT d.*,o.company_id owner FROM document_evidence e
+            JOIN documents d ON d.id=e.supplement_id JOIN documents o ON o.id=e.document_id
+            WHERE e.document_id=? ORDER BY d.id''',(document_id,)).fetchall()
+        if any(not d['allow_external'] or d['quarantined_at'] or d['company_id']!=d['owner'] for d in docs):
+            raise ValueError('部分补充材料未授权外发或已隔离，请到待补证入口核对授权或移除关联。')
+        if len(docs)>10 or sum(len(d['body']) for d in docs)>24000:
+            raise ValueError('关联补充材料超过上限，请到待补证入口精简材料。')
+        return [dict(c) for d in docs for c in db.execute('''SELECT c.id,c.document_id,c.locator,c.text,d.title
+            FROM chunks c JOIN documents d ON d.id=c.document_id WHERE c.document_id=? ORDER BY c.id''',(d['id'],))]
 
     def set_setting(self, key, value):
         with self.db() as db:

@@ -2,7 +2,7 @@
 const $ = (s, root=document) => root.querySelector(s);
 const $$ = (s, root=document) => [...root.querySelectorAll(s)];
 const esc = v => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const names = {overview:'风险总览',events:'风险事件',documents:'资料与分析',websites:'网站检索',knowledge:'知识库',jobs:'资料与分析',settings:'模型与规则',report:'风险简报'};
+const names = {overview:'风险总览',events:'风险事件',documents:'资料与分析',evidence:'待补证',websites:'网站检索',knowledge:'知识库',jobs:'资料与分析',settings:'模型与规则',report:'风险简报'};
 const levels = {red:'高风险',orange:'中风险',yellow:'一般关注'};
 const statuses = {pending:'待复核',accepted:'已认可',needs_change:'需修正',queued:'排队中',running:'分析中',completed:'已完成',failed:'失败',cancelled:'已取消',risk:'发现风险',non_risk:'未发现风险',insufficient:'证据不足'};
 const state = {config:null,scope:'all',page:1,route:'overview',importMode:'file',filter:{},renderId:0,kq:'',ki:0};
@@ -446,7 +446,7 @@ async function render(options={}){
   const route=rawRoute==='jobs'?'documents':rawRoute;
   if(state.route!==route||state.routeKey!==location.hash){
     state.filter={};state.page=1;
-    if(['events','documents','knowledge','jobs','report'].includes(route)){
+    if(['events','documents','knowledge','jobs','report','evidence'].includes(route)){
       const params=new URLSearchParams(routeSearch);
       for(const key of ['q','level','category','review','date_from','date_to','status','policy','sort'])if(params.has(key))state.filter[key]=params.get(key);
       state.page=Math.max(1,parseInt(params.get('page'),10)||1);
@@ -478,6 +478,7 @@ async function render(options={}){
     else if(route==='documents'||route==='knowledge')html=await documents(route==='knowledge');
     else if(route==='jobs')html=await jobsPage();
     else if(route==='websites')html=await websitePage();
+    else if(route==='evidence')html=await evidencePage(id);
     else if(route==='settings')html=await settings();
     else if(route==='report')html=await reportView();
     else html=empty('页面不存在','请从左侧导航选择工作区。','<a href="#overview" class="primary">返回总览</a>');
@@ -490,6 +491,7 @@ async function render(options={}){
     if(options.quiet)window.scrollTo(0,previousScroll);
     else if(routeChanged)window.scrollTo({top:0,behavior:'instant'});
     bindOperations();
+    bindEvidence();
   }catch(e){if(renderId===state.renderId)$('#main').innerHTML=errorBox(e.message)+'<button class="secondary" id="retry-page">重新加载</button>';$('#retry-page')?.addEventListener('click',render);}
 }
 // Empty overview: the map slot becomes a standby card whose single action follows the workspace's real state.
@@ -586,6 +588,7 @@ function importForm(knowledge){
 function renderDocAnalysisStatus(d){
   const st=['queued','running','failed'].includes(d.job_status)?d.job_status:(d.decision||d.job_status);
   let html=badge(st);
+  if(d.decision==='insufficient'&&d.analysis_id)html+=`<a class="source-line" href="#evidence/${d.analysis_id}">补充证据 ${icon('arrow')}</a>`;
   if(d.job_status==='queued'||d.job_status==='running'){
     html+=`<div class="source-line nowrap">任务 #${d.job_id} · ${d.job_progress||0} / ${d.job_total||'—'} 段</div><progress class="job-progress" value="${d.job_progress||0}" max="${d.job_total||1}" aria-label="任务进度"></progress>`;
   }else if(d.job_status==='failed'&&d.job_error){
@@ -690,13 +693,14 @@ async function showSource(id, quote = '') {
       : '<p class="notice-inline" role="note">原文已变化，未能定位该引用片段，请人工核对。</p>';
     const kwHtml = d.zh_keywords ? d.zh_keywords.split(/[、,，;；]+/).filter(Boolean).map((k) => `<span class="kw-chip">${esc(k.trim())}</span>`).join('') : '';
     const zhBlock = (d.zh_summary || d.zh_keywords) ? `<section class="detail-zh-card"><h3>中文摘要与检索关键词 <small>AI 生成，仅作检索辅助</small></h3>${d.zh_summary ? `<p class="detail-zh-summary">${esc(d.zh_summary)}</p>` : ''}${kwHtml ? `<div class="detail-zh-keywords">${kwHtml}</div>` : ''}</section>` : '';
-    const metaGrid = `<dl class="detail-meta-grid"><div><dt>资料编号</dt><dd>#${d.id}（${d.kind === 'knowledge' ? '知识库法规/参考资料' : '待分析业务资料'}${d.kind_label ? ` · ${esc(d.kind_label)}` : ''}）</dd></div>${sourceDateRows(d)}<div><dt>信息来源</dt><dd>${esc(d.source || '未填写')}</dd></div><div><dt>正文规模</dt><dd>${(d.body?.length || 0).toLocaleString('zh-CN')} 字符 · 共 ${d.chunks?.length || 1} 个检索分段</dd></div><div><dt>外部 AI 授权</dt><dd>${d.allow_external ? '已授权外部 AI 使用' : '仅本地保存'}</dd></div></dl>`;
+    const metaGrid = `<dl class="detail-meta-grid"><div><dt>资料编号</dt><dd>#${d.id}（${d.kind === 'knowledge' ? '知识库法规/参考资料' : d.kind === 'supplement' ? '关联补充材料' : '待分析业务资料'}${d.kind_label ? ` · ${esc(d.kind_label)}` : ''}）</dd></div>${sourceDateRows(d)}<div><dt>信息来源</dt><dd>${esc(d.source || '未填写')}</dd></div><div><dt>正文规模</dt><dd>${(d.body?.length || 0).toLocaleString('zh-CN')} 字符 · 共 ${d.chunks?.length || 1} 个检索分段</dd></div><div><dt>外部 AI 授权</dt><dd>${d.allow_external ? '已授权外部 AI 使用' : '仅本地保存'}</dd></div></dl>`;
     const quarantine = d.quarantined_at ? `<div class="notice-inline" role="note">资料已隔离（待核实），不计入统计、列表和简报，也不能进入分析。原因：${esc(d.quarantine_reason || '未填写')}</div>` : '';
     const analyses = d.kind === 'event' || d.analyses?.length
-      ? `<h3>分析记录</h3>${d.analyses.length ? d.analyses.map((a) => `<p class="form-note">v${a.version} · ${badge(a.decision)} · ${esc(a.model)} · ${when(a.created_at)}<br>${esc(a.result.reason || a.result.parts?.map((p) => p.reason).join('；') || '查看风险列表中的分析结果。')}</p>`).join('') : '<p class="muted">尚无分析记录。</p>'}`
+      ? `<h3>分析记录</h3>${d.analyses.length ? d.analyses.map((a) => `<p class="form-note">v${a.version} · ${badge(a.decision)} · ${esc(a.model)} · ${when(a.created_at)} · 规则 ${esc(a.rule_version)}${a.result.rules_snapshot_origin==='upgrade'?'（升级时固定）':''}${a.result.supplement_document_ids?.length?` · 补证材料 ${a.result.supplement_document_ids.map(id=>'#'+id).join('、')}`:''}${a.decision==='insufficient'?` · <a href="#evidence/${a.id}" data-history>进入补证</a>`:''}<br>${esc(a.result.reason || a.result.parts?.map((p) => p.reason).join('；') || '查看风险列表中的分析结果。')}</p>`).join('') : '<p class="muted">尚无分析记录。</p>'}`
       : '';
-    $('#source-title').textContent = d.kind === 'knowledge' ? '知识库资料详情' : '业务资料与分析详情';
+    $('#source-title').textContent = d.kind === 'knowledge' ? '知识库资料详情' : d.kind === 'supplement' ? '补充材料详情' : '业务资料与分析详情';
     $('#source-content').innerHTML = `<h2>${esc(d.title)}${demoTag(d.demo)}${quarantineTag(d)}</h2>${quarantine}${metaGrid}<div class="actions source-actions">${quoteTools}${d.filename ? `<a class="secondary small" href="api/documents/${d.id}/file">下载原始快照/附件</a>` : ''}${d.url ? `<a class="secondary small" href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">打开原始网页链接 ↗</a>` : ''}</div>${zhBlock}<h3>原始全文（${(d.body?.length || 0).toLocaleString('zh-CN')} 字符）</h3><div class="source-body">${text}</div>${analyses}`;
+    $$('[data-history]',dialog).forEach(link=>link.onclick=()=>dialog.close());
     const history = d.analyses.filter((a) => a.events?.length);
     if (history.length) {
       $('#source-content').insertAdjacentHTML('beforeend', `<h3>各版本风险事件</h3>${history.map((a) => `<div class="version-links"><small>v${a.version}</small>${a.events.map((e) => `<a href="#event/${e.id}" data-history>${esc(e.title)}</a>`).join('')}</div>`).join('')}`);

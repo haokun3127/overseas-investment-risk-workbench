@@ -34,11 +34,15 @@ class Worker:
         with self.store.db() as db:
             claimed=db.execute("UPDATE jobs SET status='running',started_at=? WHERE id=? AND status='queued'",(now(),job['id'])).rowcount
             if not claimed: return
+            job = dict(db.execute('SELECT * FROM jobs WHERE id=?',(job['id'],)).fetchone())
         doc = None
         try:
             doc = self.store.one('SELECT * FROM documents WHERE id=?',(job['document_id'],))
             company=json.loads(job.get('company_json') or '{}')
-            rules = self.store.setting('rules')
+            if not job.get('rules_json'):
+                raise ValueError('任务缺少规则快照，请重新提交分析。')
+            rules = json.loads(job['rules_json'])
+            supplements = json.loads(job.get('supplements_json') or '[]')
             if not doc:
                 raise ValueError('资料已删除，任务无法继续。')
             if doc.get('quarantined_at'):
@@ -52,6 +56,12 @@ class Worker:
                 raise ValueError('该资料未获准发送到外部模型。')
             context=company if company.get('allow_external') else {}
             job_company_id = doc.get('company_id') or company.get('id') or 0
+            for item in supplements:
+                supplemental_doc = self.store.one('SELECT * FROM documents WHERE id=?',(item['document_id'],))
+                if not supplemental_doc or supplemental_doc['quarantined_at'] or not supplemental_doc['allow_external']:
+                    raise ValueError('补充资料已删除、隔离或撤销外发授权，请核对后重新提交。')
+                if supplemental_doc.get('company_id') != doc.get('company_id'):
+                    raise ValueError('补充资料归属与原资料不一致。')
             chunks = self.store.rows('SELECT * FROM chunks WHERE document_id=? ORDER BY id',(doc['id'],))
             with self.store.db() as db:
                 db.execute('UPDATE jobs SET total=? WHERE id=?',(len(chunks),job['id']))
@@ -62,6 +72,8 @@ class Worker:
                     h.pop('zh_summary', None)
                     h.pop('zh_keywords', None)
                 references = {f'S{chunk["id"]}':{'text':chunk['text'],'kind':'source','document_id':doc['id'],'locator':chunk['locator'],'title':doc['title']}}
+                for item in supplements:
+                    references[f'S{item["id"]}'] = {**item,'kind':'source','role':'supplement'}
                 for hit in hits:
                     references[f'K{hit["id"]}'] = {**hit,'kind':'knowledge'}
                     knowledge[str(hit['id'])] = hit
@@ -86,6 +98,9 @@ class Worker:
             result_blob = {'decision':decision,'parts':results,'prompt_version':model.PROMPT_VERSION,
                            'company_context':context,
                            'partial_context':len(chunks)>1,'review_required':True,
+                           'parent_analysis_id':job.get('parent_analysis_id'),
+                           'supplement_document_ids':list(dict.fromkeys(i['document_id'] for i in supplements)),
+                           'rules_snapshot_origin':job.get('rules_snapshot_origin'),
                            'model_config':{'wire_api':self.settings.model_wire_api,'reasoning_effort':self.settings.model_reasoning_effort,'store':self.settings.model_store}}
             with self.store.db() as db:
                 version = db.execute('SELECT COALESCE(MAX(version),0)+1 FROM analyses WHERE document_id=?',(doc['id'],)).fetchone()[0]

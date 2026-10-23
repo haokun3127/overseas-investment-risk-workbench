@@ -26,6 +26,7 @@ from .retrieval import annotate_hits, kind_label, retrieve
 from .store import DEFAULT_RULES, Store, now
 from .websearch import Collector, initialize as initialize_websearch, router as websearch_router
 from . import websearch
+from .evidence import router as evidence_router
 
 class Credentials(BaseModel):
     password: str = Field(min_length=10,max_length=128)
@@ -100,6 +101,7 @@ def create_app(settings=None, run_worker=True):
     app.state.enricher=enricher
     app.include_router(websearch_router(store,settings))
     app.include_router(companies.router(store))
+    app.include_router(evidence_router(store,settings))
 
     @app.middleware('http')
     async def guard(request,call_next):
@@ -152,7 +154,7 @@ def create_app(settings=None, run_worker=True):
 
     @app.get('/api/release')
     def release():
-        return JSONResponse({'version':'20261024-workflow1'},headers={'Cache-Control':'no-store'})
+        return JSONResponse({'version':'20261024-evidence2'},headers={'Cache-Control':'no-store'})
 
     @app.get('/api/health')
     def health(): return {'status':'ok'}
@@ -380,6 +382,7 @@ def create_app(settings=None, run_worker=True):
             (SELECT total FROM jobs WHERE document_id=d.id ORDER BY id DESC LIMIT 1) job_total,
             (SELECT error FROM jobs WHERE document_id=d.id ORDER BY id DESC LIMIT 1) job_error,
             (SELECT decision FROM analyses WHERE document_id=d.id ORDER BY version DESC LIMIT 1) decision
+            ,(SELECT id FROM analyses WHERE document_id=d.id ORDER BY version DESC LIMIT 1) analysis_id
             FROM documents d WHERE """+where+' ORDER BY '+order+' LIMIT 30 OFFSET ?',args+[(page-1)*30])
         for row in rows:
             row['editable']=cid is None or row['company_id']==cid
@@ -396,9 +399,10 @@ def create_app(settings=None, run_worker=True):
         doc.pop('file_path'); doc.pop('digest')
         doc['editable']=cid is None or doc.get('company_id')==cid
         doc['chunks']=store.rows('SELECT id,locator,text FROM chunks WHERE document_id=? ORDER BY id',(doc_id,))
-        doc['analyses']=store.rows('SELECT id,version,decision,model,mode,created_at,result_json FROM analyses WHERE document_id=? ORDER BY version DESC',(doc_id,))
+        doc['analyses']=store.rows('SELECT id,version,decision,model,mode,created_at,result_json,rules_json FROM analyses WHERE document_id=? ORDER BY version DESC',(doc_id,))
         for row in doc['analyses']:
             row['result']=json.loads(row.pop('result_json'))
+            row['rule_version']=json.loads(row.pop('rules_json')).get('version','')
             row['events']=store.rows('SELECT id,title FROM events WHERE analysis_id=?',(row['id'],))
         return doc
 
@@ -411,7 +415,7 @@ def create_app(settings=None, run_worker=True):
         if doc['quarantined_at']:
             raise HTTPException(409,'资料已隔离待核实，不能修改外发授权。')
         with store.db() as db:
-            if db.execute("SELECT id FROM jobs WHERE document_id=? AND status IN ('queued','running')",(doc_id,)).fetchone():
+            if db.execute("SELECT id FROM jobs WHERE status IN ('queued','running') AND (document_id=? OR EXISTS(SELECT 1 FROM json_each(jobs.supplements_json) s WHERE json_extract(s.value,'$.document_id')=?))",(doc_id,doc_id)).fetchone():
                 raise HTTPException(409,'资料有待处理任务，请等待任务结束后修改授权范围。')
             if db.execute('UPDATE documents SET allow_external=? WHERE id=? AND demo=0',(int(data.allow_external),doc_id)).rowcount==0:
                 raise HTTPException(404,'资料不存在或属于不可修改的演示资料。')
@@ -442,6 +446,7 @@ def create_app(settings=None, run_worker=True):
         selected_company=session_company(request)
         ids=list(dict.fromkeys(data.document_ids))
         with store.db() as db:
+            db.execute('BEGIN IMMEDIATE')
             checked={}
             for doc_id in ids:
                 doc=db.execute('SELECT * FROM documents WHERE id=?',(doc_id,)).fetchone()
@@ -457,7 +462,9 @@ def create_app(settings=None, run_worker=True):
                 snap=companies.snapshot(store,owner)
                 active=db.execute("SELECT id FROM jobs WHERE document_id=? AND status IN ('queued','running')",(doc_id,)).fetchone()
                 if active: result.append({'id':active['id'],'existing':True}); continue
-                job_id=db.execute("INSERT INTO jobs(document_id,status,created_at,company_json) VALUES (?,'queued',?,?)",(doc_id,now(),snap)).lastrowid
+                supplemental=store.supplement_snapshot(db,doc_id)
+                prior=db.execute('SELECT id FROM analyses WHERE document_id=? ORDER BY version DESC,id DESC LIMIT 1',(doc_id,)).fetchone()
+                job_id=store.enqueue_job(db,doc_id,snap,supplemental,prior['id'] if supplemental and prior else None)
                 result.append({'id':job_id,'existing':False})
         return {'items':result}
 
@@ -474,7 +481,11 @@ def create_app(settings=None, run_worker=True):
         total=store.one('SELECT COUNT(*) n'+base,args)['n'];page=max(1,page)
         active_sql="SELECT COUNT(*) n FROM jobs j JOIN documents d ON d.id=j.document_id WHERE j.status IN ('queued','running')"+(' AND d.company_id=?' if cid is not None else '')
         active_args=(cid,) if cid is not None else ()
-        return {'items':store.rows('SELECT j.*,d.title'+base+' ORDER BY j.id DESC LIMIT 100 OFFSET ?',args+[(page-1)*100]),'total':total,'page':page,'page_size':100,
+        rows=store.rows('SELECT j.*,d.title'+base+' ORDER BY j.id DESC LIMIT 100 OFFSET ?',args+[(page-1)*100])
+        for row in rows:
+            row['rule_version']=json.loads(row.pop('rules_json') or '{}').get('version','')
+            row['supplement_document_ids']=list(dict.fromkeys(c['document_id'] for c in json.loads(row.pop('supplements_json'))))
+        return {'items':rows,'total':total,'page':page,'page_size':100,
                 'active':store.one(active_sql,active_args)['n']}
 
     @app.get('/api/jobs/active')
@@ -514,6 +525,8 @@ def create_app(settings=None, run_worker=True):
                 if doc['demo']: reasons.append('虚构演示资料不能进入真实分析')
                 if doc['quarantined_at']: reasons.append('资料已隔离（待核实）')
                 if not doc['allow_external']: reasons.append('尚未授权外部分析')
+                linked=store.rows('SELECT d.allow_external,d.quarantined_at FROM document_evidence e JOIN documents d ON d.id=e.supplement_id WHERE e.document_id=?',(doc_id,))
+                if any(not d['allow_external'] or d['quarantined_at'] for d in linked): reasons.append('部分补充材料尚未授权或已隔离，请到待补证入口处理')
             active=store.one("SELECT id FROM jobs WHERE document_id=? AND status IN ('queued','running')",(doc_id,)) if doc else None
             owner=doc.get('company_id') if doc else None
             company=companies.current(store,owner) if owner else None
@@ -523,7 +536,7 @@ def create_app(settings=None, run_worker=True):
         if not settings.configured: blockers.append('尚未配置模型服务')
         if not store.setting('rules')['confirmed']: blockers.append('风险分类分级规则尚未确认')
         current=companies.current(store,session_company(request))
-        return {'items':items,'blockers':blockers,'ready':not blockers and all(not i['issues'] for i in items),'mode':settings.model_mode,
+        return {'items':items,'blockers':blockers,'ready':not blockers and all(not i['issues'] for i in items),'mode':settings.model_mode,'rule_version':store.setting('rules')['version'],
                 'session_company':{'id':current['id'],'name':current['name']} if current else None}
 
     def events_query(demo='all',q='',level='',category='',review='',date_from='',date_to='',company_id=None):
@@ -667,7 +680,9 @@ def create_app(settings=None, run_worker=True):
             jobs_rows=store.rows('SELECT status,COUNT(*) count FROM jobs GROUP BY status')
             unanalysed=store.one("SELECT COUNT(*) n FROM documents d WHERE kind='event' AND demo=0 AND quarantined_at IS NULL AND NOT EXISTS(SELECT 1 FROM analyses a WHERE a.document_id=d.id)")['n']
             recent=store.rows('SELECT action,detail,created_at FROM audit ORDER BY id DESC LIMIT 15')
-        return {'documents':counts,'jobs':jobs_rows,
+        evidence_sql="SELECT count(*) n FROM documents d JOIN analyses a ON a.id=(SELECT id FROM analyses WHERE document_id=d.id ORDER BY version DESC,id DESC LIMIT 1) WHERE d.kind='event' AND d.demo=0 AND d.quarantined_at IS NULL AND a.decision='insufficient'"
+        evidence_count=store.one(evidence_sql+(' AND d.company_id=?' if cid is not None else ''),(cid,) if cid is not None else ())['n']
+        return {'documents':counts,'jobs':jobs_rows,'needs_evidence':evidence_count,
             'unanalyzed':unanalysed,
             'recent_activity':recent,
             'checks':[{'label':'模型服务配置','ready':settings.configured,'href':'#settings'},

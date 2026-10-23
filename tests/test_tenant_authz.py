@@ -111,7 +111,7 @@ WEB_ROUTES = [
     ('put', '/api/web/sources/1'), ('post', '/api/web/sources/1/pause'), ('post', '/api/web/runs'),
     ('get', '/api/web/runs'), ('post', '/api/web/runs/batch/cancel'), ('get', '/api/web/discoveries'),
     ('get', '/api/web/runs/1'), ('post', '/api/web/runs/1/cancel'), ('post', '/api/web/runs/1/review'),
-    ('get', '/api/web/pages/1'), ('post', '/api/web/import'),
+    ('get', '/api/web/pages/1'), ('get', '/api/web/pages/1/compare'), ('post', '/api/web/import'),
 ]
 
 

@@ -132,18 +132,20 @@ async function showWebRun(id){
     const inKbCount=r.items.filter(p=>p.in_knowledge).length;
     const rejected=r.items.filter(p=>p.relevant===0).length;
     const undecided=r.items.filter(p=>p.relevant===null).length;
-    const renderPageCard=(p,isHit)=>`<article class="web-result-card ${isHit?'is-hit':'is-skipped'}">`+
+    const renderPageCard=(p,isHit)=>`<article class="web-result-card ${isHit?'is-hit':'is-skipped'}" data-change-status="${p.change?.status||'added'}">`+
+      `<p><span class="change-label ${p.change?.status||'added'}">${changeNames[p.change?.status||'added']}</span>${p.change?.previous_fetched_at?` <small>对比 ${when(p.change.previous_fetched_at)} 的快照</small>`:''}</p>`+
       `<div class="wrc-head"><label class="wrc-check">${isHit?`<input type="checkbox" name="web-page" value="${p.id}" aria-label="选择 ${esc(p.title)}" ${r.status==='completed'?'':'disabled'}>`:''}<h3>${esc(p.title)}</h3></label><div class="wrc-badges"><span class="web-tag method-${esc(p.method)}">${webMethods[p.method]||'直接抓取'}</span><span class="web-tag">${esc(webDateLabel(p))}</span>${p.archived_at?`<span class="web-tag">存档快照 ${esc(p.archived_at)}</span>`:''}${p.in_knowledge?`<span class="web-tag ok">${p.knowledge_from_history?'历史已存知识库':'已存知识库'}</span>`:''}<span class="badge ${p.relevant===1?'accepted':''}">本次筛选：${p.relevant===null?'待人工判定':p.relevant?'相关命中':'已剔除'}</span></div></div>`+
       `<a class="wsc-url" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" title="${esc(p.url)}">${esc(p.url)}</a>`+
       (p.knowledge_from_history?`<p class="history-saved-note">资料保存于 ${when(p.knowledge_saved_at)}；本次筛选不会删除历史入库资料。</p>`:'')+
       `<p class="wrc-reason"><strong>AI 判定依据：</strong>${esc(p.reason||'—')}</p>`+
       (p.quote?`<blockquote class="wrc-quote">${esc(p.quote)}</blockquote>`:'')+
-      `<div class="wrc-foot"><span>抓取于 ${when(p.fetched_at)} · ${p.characters.toLocaleString('zh-CN')} 字符</span><div class="wrc-actions"><button class="secondary small" data-web-original="${p.id}">查看采集原文</button>${Object.entries(p.imports).map(([kind,doc])=>`<button class="secondary small" data-source="${doc}">${kind==='knowledge'?'查看知识库详情':'查看分析记录'}</button>`).join('')}</div></div>`+
+      `<div class="wrc-foot"><span>抓取于 ${when(p.fetched_at)} · ${p.characters.toLocaleString('zh-CN')} 字符</span><div class="wrc-actions">${r.status==='completed'?`<button class="secondary small" data-web-compare="${p.id}" aria-expanded="false" aria-controls="compare-${p.id}">查看更新对比</button>`:''}<button class="secondary small" data-web-original="${p.id}">查看采集原文</button>${Object.entries(p.imports).map(([kind,doc])=>`<button class="secondary small" data-source="${doc}">${kind==='knowledge'?'查看知识库详情':'查看分析记录'}</button>`).join('')}</div></div><section id="compare-${p.id}" class="web-comparison" aria-label="正文版本对比" hidden></section>`+
     `</article>`;
 
     target.innerHTML=`<div class="panel-heading"><div><h2>${esc(r.config.name)} <small>任务 #${r.id}</small></h2></div><div class="actions">${badge(r.status)}${active?`<button class="secondary small" id="cancel-web-run">取消检索</button>`:''}${!active&&r.items.some(p=>p.relevant===null)?`<button class="primary small" id="rereview-web-run">重新筛选</button>`:''}</div></div>`+
       `<div class="panel-content">`+
       `<div class="wrd-summary-strip"><div class="wrd-stat"><span>已采集页面</span><strong>${r.items.length} <small>/ 最多 ${r.config.max_pages} 页</small></strong></div><div class="wrd-stat hit"><span>AI 筛选命中</span><strong>${relItems.length} <small>篇相关</small></strong></div><div class="wrd-stat"><span>已存知识库（含历史）</span><strong>${inKbCount} <small>篇</small></strong></div><div class="wrd-kw"><span>检索词与模型</span><div class="wsc-keywords">${keywordChips(r.config.keywords)}${r.model?`<span class="wsc-meta-pill">${esc(r.model)}</span>`:''}</div></div></div>`+
+      (r.status==='completed'&&r.items.length?changeControls(r.items):'')+
       (active?`<p role="status" class="web-progress">${webStage({...r,pages:r.items.length})}<span>可离开页面稍后查看。</span></p>`:'')+
       (r.error?(r.hint?`<div class="web-reason-box">${webReason(r.hint,r.error)}</div>`:errorBox(r.error)):'')+
       (relItems.length?`<div class="wrd-section-title"><span>相关命中页面（${relItems.length} 篇）</span></div><div class="web-result-list">${relItems.map(p=>renderPageCard(p,true)).join('')}</div>`:(!active&&r.items.length?`<div class="wrd-no-hits">采集的 ${r.items.length} 个页面中，${rejected} 个被 AI 判为目录/导航或无关，${undecided} 个 AI 未给出可核验判定（需人工查看）。可展开下方查看原因。</div>`:(!active?empty('没有可展示的页面','请查看下方失败原因与处理建议。'):'')))+
@@ -151,6 +153,7 @@ async function showWebRun(id){
       (otherItems.length?`<details class="web-skipped-drawer" ${relItems.length?'':'open'}><summary>未命中页面（剔除 ${rejected} · 待人工判定 ${undecided}）</summary><div class="web-result-list skipped-list">${otherItems.map(p=>renderPageCard(p,false)).join('')}</div></details>`:'')+
       (r.errors.length?`<details class="web-errors" ${r.items.length?'':'open'}><summary>未采集成功的链接（${r.errors.length} 个）</summary>${r.errors.map(e=>`<p>${e.hint?`<strong>${esc(e.hint)}</strong>`:`<strong>${esc(e.error)}</strong>`}<br><a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">${esc(e.url)}</a>${e.hint?`<details class="tech-detail"><summary>技术详情</summary>${esc(e.error)}</details>`:''}</p>`).join('')}</details>`:'')+
       `</div>`;
+    bindWebChanges(target);
     $('#cancel-web-run')?.addEventListener('click',async()=>{try{await api('/web/runs/'+id+'/cancel',{method:'POST'});await showWebRun(id);}catch(e){toast(e.message);}});
     $('#rereview-web-run')?.addEventListener('click',async e=>{e.currentTarget.disabled=true;try{await api('/web/runs/'+id+'/review',{method:'POST'});toast('已排队重新筛选');await showWebRun(id);refreshWebRuns();}catch(err){toast(err.message);e.currentTarget.disabled=false;}});
     $$('[data-web-original]').forEach((b) => {
@@ -180,7 +183,7 @@ async function showWebRun(id){
     if(importKind&&importAnalyze){const sync=()=>{importAnalyze.disabled=importKind.value==='knowledge';if(importAnalyze.disabled)importAnalyze.checked=false;$('[data-web-company]',target).hidden=importKind.value==='knowledge';};importKind.onchange=sync;sync();}
     const syncPicked=()=>{const n=$$('[name=web-page]:checked',target).length;const b=$('#web-import-button');if(b){b.disabled=!n;b.textContent=n?`保存 ${n} 个页面`:'选择命中页后入库';}};
     $$('[name=web-page]',target).forEach(c=>c.onchange=syncPicked);
-    $('#web-select-all')?.addEventListener('click',()=>{const boxes=$$('[name=web-page]:not(:disabled)',target);const all=boxes.every(c=>c.checked);boxes.forEach((c,i)=>c.checked=!all&&i<20);syncPicked();});
+    $('#web-select-all')?.addEventListener('click',()=>{const boxes=$$('[name=web-page]:not(:disabled)',target).filter(c=>!c.closest('.web-result-card')?.hidden);const all=boxes.every(c=>c.checked);boxes.forEach((c,i)=>c.checked=!all&&i<20);syncPicked();});
     $('#web-import-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget),b=$('#web-import-button');b.disabled=true;try{const result=await api('/web/import',{method:'POST',body:{page_ids:$$('[name=web-page]:checked',target).map(c=>Number(c.value)),kind:f.get('kind'),analyze:f.has('analyze'),company_id:f.get('kind')==='knowledge'?null:(Number(f.get('company_id'))||null)}});toast(`已保存 ${result.items.filter(i=>i.created).length} 条资料${result.items.some(i=>i.job_id)?'；风险分析已排队':''}`);await showWebRun(id);}catch(error){$('#web-import-feedback').innerHTML=errorBox(error.message);b.disabled=false;}});
     if(active)webPoll=setTimeout(()=>showWebRun(id),3000);
   }catch(error){if(target)target.innerHTML=errorBox(error.message);}

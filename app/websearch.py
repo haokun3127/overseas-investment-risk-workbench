@@ -25,6 +25,7 @@ from . import companies
 from .access import admin_only, session_company
 from .ingest import insert_document
 from .store import now
+from .webcompare import previous_page, summary as change_summary, differences
 
 AGENT = 'RiskWorkbenchBot'
 USER_AGENT = 'RiskWorkbenchBot/1.1'
@@ -745,6 +746,7 @@ def initialize(store):
         CREATE TABLE IF NOT EXISTS web_runs(id INTEGER PRIMARY KEY,source_id INTEGER NOT NULL,config_json TEXT NOT NULL,status TEXT NOT NULL,progress INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,finished_at TEXT,model TEXT NOT NULL DEFAULT '',usage_json TEXT NOT NULL DEFAULT '[]');
         CREATE TABLE IF NOT EXISTS web_pages(id INTEGER PRIMARY KEY,run_id INTEGER NOT NULL,url TEXT NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,date TEXT NOT NULL DEFAULT '',fetched_at TEXT NOT NULL,digest TEXT NOT NULL,snapshot TEXT NOT NULL,relevant INTEGER,reason TEXT NOT NULL DEFAULT '',quote TEXT NOT NULL DEFAULT '',imports_json TEXT NOT NULL DEFAULT '{}');
         CREATE TABLE IF NOT EXISTS web_fetch_errors(id INTEGER PRIMARY KEY,run_id INTEGER NOT NULL,url TEXT NOT NULL,error TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS web_page_versions ON web_pages(url,run_id);
         ''')
         columns={row['name'] for row in db.execute('PRAGMA table_info(web_sources)')}
         for column,ddl in (('category',"TEXT NOT NULL DEFAULT ''"),('enabled','INTEGER NOT NULL DEFAULT 1'),('deleted_at','TEXT'),('target_company_id','INTEGER DEFAULT NULL')):
@@ -803,10 +805,11 @@ def transfer(store,settings,page_ids,kind,analyze=False,company_id=None):
             job_id=None
             if analyze and target=='event':
                 with store.db() as db:
+                    db.execute('BEGIN IMMEDIATE')
                     active=db.execute("SELECT id FROM jobs WHERE document_id=? AND status IN ('queued','running')",(doc_id,)).fetchone()
                     prior=db.execute('SELECT id FROM analyses WHERE document_id=?',(doc_id,)).fetchone()
                     if active: job_id=active['id']
-                    elif not prior: job_id=db.execute("INSERT INTO jobs(document_id,status,created_at,company_json) VALUES (?,'queued',?,?)",(doc_id,now(),companies.snapshot(store,company_id))).lastrowid
+                    elif not prior: job_id=store.enqueue_job(db,doc_id,companies.snapshot(store,company_id))
             result.append({'page_id':page['id'],'kind':target,'id':doc_id,'created':created,'job_id':job_id})
         with store.db() as db: db.execute('UPDATE web_pages SET imports_json=? WHERE id=?',(json.dumps(imports),page['id']))
     owner=company_id if kind in ('event','both') else None
@@ -1184,7 +1187,10 @@ def router(store,settings):
         run=store.one('SELECT * FROM web_runs WHERE id=?',(run_id,))
         if not run:raise HTTPException(404,'检索任务不存在。')
         run['config']=json.loads(run.pop('config_json'));run['usage']=json.loads(run.pop('usage_json'))
-        run['items']=store.rows('SELECT id,url,title,date,archived_at,fetched_at,relevant,reason,quote,imports_json,method,body FROM web_pages WHERE run_id=?',(run_id,))
+        run['items']=store.rows('SELECT id,run_id,url,title,date,archived_at,fetched_at,relevant,reason,quote,imports_json,method,body FROM web_pages WHERE run_id=?',(run_id,))
+        with store.db() as db:
+            for item in run['items']:
+                item['change']=change_summary(item,previous_page(db,item,run['source_id']))
         for item in run['items']:
             item['imports']=json.loads(item.pop('imports_json'));body=item.pop('body');item['characters']=len(body)
             if not item['method']: item['method']='archive' if item['title'].startswith('［网页存档') else 'direct'
@@ -1227,6 +1233,19 @@ def router(store,settings):
             match=re.match(r'^［网页存档\s+(\d{4}-\d{2}-\d{2})］',page['title'] or '')
             page['archived_at']=match.group(1) if match else ''
         return page
+    @api.get('/pages/{page_id}/compare')
+    def compare(page_id:int):
+        current=store.one('SELECT p.*,r.source_id,r.status FROM web_pages p JOIN web_runs r ON r.id=p.run_id WHERE p.id=?',(page_id,))
+        if not current:raise HTTPException(404,'网页不存在。')
+        if current['status']!='completed':raise HTTPException(409,'请等待采集任务完成后再对比。')
+        with store.db() as db:
+            previous=previous_page(db,current,current['source_id'])
+        result=change_summary(current,previous)
+        fields=('id','run_id','title','url','fetched_at','method','archived_at')
+        result['current']={k:current[k] for k in fields}
+        result['previous']={k:previous[k] for k in fields} if previous else None
+        result.update(differences(current,previous) if result['status']=='changed' else {'hunks':[],'added_characters':0,'removed_characters':0,'truncated':False})
+        return result
     @api.post('/import')
     def ingest(data:ImportInput,request:Request):
         company_id=(data.company_id or session_company(request)) if data.kind in ('event','both') else None
