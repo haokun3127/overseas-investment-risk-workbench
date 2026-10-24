@@ -59,19 +59,22 @@
 body.is-scrolled #shell .topbar,
 body[data-route=overview] #shell .topbar,
 body[data-route=overview].is-scrolled #shell .topbar {
-  top: 12px;
-  height: 52px;
-  margin: 12px 20px 0;
-  padding-right: 12px;
-  padding-left: 8px;
-  border: 1px solid rgb(255 255 255 / 70%);
-  border-radius: 18px;
-  background: rgb(255 255 255 / 78%);
+  position: sticky;
+  top: 0;
+  height: var(--shell-top);
+  min-height: var(--shell-top);
+  margin: 0;
+  padding: 0 max(var(--gutter),calc((100% - var(--content-max)) / 2 + var(--gutter)));
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--paper);
   color: var(--text-2);
-  box-shadow: 0 16px 40px -24px rgb(5 10 20 / 70%), inset 0 1px 0 #fff;
-  -webkit-backdrop-filter: blur(18px) saturate(170%);
-  backdrop-filter: blur(18px) saturate(170%);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
+#shell .topbar :focus-visible { outline: 2px solid var(--tide-700); outline-offset: 2px; }
 #shell #toggle-navigation { color: var(--text-2); }
 #shell #toggle-navigation:hover { background: rgb(15 138 134 / 10%); color: var(--tide-800); }
 #shell #breadcrumb { color: var(--text-3); }
@@ -240,7 +243,8 @@ dialog[open] {
   .kl-orb-a, .kl-orb-b, .kl-orb-c { width: 240px; height: 240px; }
   #shell .topbar,
   body.is-scrolled #shell .topbar,
-  body[data-route=overview] #shell .topbar { margin: 8px 8px 0; height: 48px; border-radius: 14px; }
+  body[data-route=overview] #shell .topbar,
+  body[data-route=overview].is-scrolled #shell .topbar { padding: 0 8px 0 4px; }
   #shell .page-heading h1,
   body[data-route=overview] #shell .page-heading h1 { font-size: 28px; }
   #shell .kpi-strip .stat-number { font-size: 32px; }

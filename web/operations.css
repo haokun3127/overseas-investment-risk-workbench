@@ -1,4 +1,5 @@
 /* Task-focused refinement of the existing ink / paper / tide visual system. */
+#shell .app-body{--shell-clearance:calc(var(--shell-top) + 16px);}
 #shell #breadcrumb,#shell #breadcrumb .crumb-root,#shell #breadcrumb .crumb-company{color:var(--text-2);}
 #shell #breadcrumb .crumb-page{color:var(--text);}
 #shell #breadcrumb .crumb-company{display:none;}
@@ -31,14 +32,14 @@ body[data-route=overview] .network-panel .signal-canvas{min-height:250px;}
 .collection-steps{display:none;}
 .category-pills .cat-pill{max-width:none;white-space:normal;height:auto;min-height:34px;}
 .web-filters>label{min-width:140px;}
-#web-results,.verification-workspace,.inspection-panel{scroll-margin-top:116px;}
+#web-results,.verification-workspace,.inspection-panel{scroll-margin-top:var(--shell-clearance);}
 #web-results:focus{outline:2px solid var(--tide-600);outline-offset:4px;}
 .history-saved-note{margin:10px 0;color:var(--text-2);font-size:12px;line-height:1.7;}
 .wrc-head{display:block;}
 .wrc-head .wrc-check{display:flex;width:100%;min-width:0;align-items:flex-start;}
 .wrc-head .wrc-check h3{flex:1;min-width:0;overflow-wrap:anywhere;}
 .wrc-head .wrc-badges{display:flex;justify-content:flex-start;flex-wrap:wrap;margin-top:10px;}
-.inspection-panel:not([hidden]){top:116px;max-height:calc(100dvh - 132px);}
+.inspection-panel:not([hidden]){top:var(--shell-clearance);max-height:calc(100dvh - var(--shell-clearance) - 16px);}
 .inspection-body{overscroll-behavior:contain;}
 .advanced-filters>summary{display:flex;align-items:center;min-height:36px;cursor:pointer;list-style:none;color:var(--text-2);font-size:13px;}
 .advanced-filters>summary::after{content:'展开';margin-left:auto;font-size:12px;}
@@ -48,7 +49,7 @@ body[data-route=overview] .network-panel .signal-canvas{min-height:250px;}
 .release-notice>span{max-width:46ch;}
 @media(min-width:1001px){
  .verification-workspace.has-inspection{display:grid;grid-template-columns:minmax(0,1fr) minmax(390px,53%);align-items:start;}
- .verification-workspace.has-inspection .inspection-panel:not([hidden]){position:sticky;display:flex;height:calc(100dvh - 132px);max-height:none;overflow:hidden;padding-bottom:0;}
+ .verification-workspace.has-inspection .inspection-panel:not([hidden]){position:sticky;display:flex;height:calc(100dvh - var(--shell-clearance) - 16px);max-height:none;overflow:hidden;padding-bottom:0;}
  .verification-workspace.has-inspection .inspection-body{overflow:auto;min-height:0;}
  .verification-workspace.has-inspection .inspection-savebar{position:static;}
 }
