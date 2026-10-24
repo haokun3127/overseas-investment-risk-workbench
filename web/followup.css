@@ -1,0 +1,52 @@
+.checklist-suggestions{list-style:none;margin:18px 0;padding:0;}
+.checklist-suggestions>li{padding:14px 0;border-top:1px solid var(--line);}
+.checklist-suggestions details,.checklist-excerpt{margin-top:8px;color:var(--text-2);}
+.checklist-panel summary,.evidence-original-reason summary,.update-history summary{cursor:pointer;min-height:40px;align-content:center;color:var(--tide-700);}
+.checklist-panel details p{line-height:1.85;max-width:76ch;white-space:pre-wrap;}
+.checklist-item{padding:18px 0;border-top:1px solid var(--line);}
+.checklist-item-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;}
+.checklist-item h3{font-size:16px;margin:0;overflow-wrap:anywhere;}
+.checklist-state{font-size:12px;flex-shrink:0;color:var(--text-2);background:var(--paper-50);padding:4px 8px;border-radius:var(--r-xs);}
+.checklist-state.provided{color:var(--tide-800);background:var(--tide-50);}
+.checklist-editor form,.checklist-add form{display:grid;gap:16px;padding:16px 0;}
+.checklist-panel fieldset{border:1px solid var(--line);border-radius:var(--r-sm);min-width:0;margin:0;padding:12px;}
+.checklist-panel legend{font-size:13px;color:var(--text-2);padding:0 6px;}
+.checklist-panel .check-field{margin:8px 0;}
+.checklist-panel form>button{justify-self:start;}
+.checklist-panel .actions{flex-wrap:wrap;}
+.checklist-add{margin-top:12px;border-top:1px solid var(--line);padding-top:12px;}
+.updates-filter{flex-wrap:wrap;align-items:end;}
+.updates-filter label{flex:1 1 150px;min-width:150px;}
+.updates-filter input,.updates-filter select{width:100%;}
+.updates-inbox>ul{list-style:none;margin:0;padding:0;}
+.updates-inbox>ul>li{padding:24px;border-bottom:1px solid var(--line);scroll-margin-top:116px;}
+.update-row-head{display:flex;gap:24px;justify-content:space-between;align-items:flex-start;}
+.update-row-head>div{min-width:0;flex:1;}
+.update-row-head>button{flex-shrink:0;}
+.update-row-head h2{font-size:16px;margin:10px 0 8px;overflow-wrap:anywhere;}
+.update-meta{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;font-size:12px;color:var(--text-2);}
+.update-state{color:var(--tide-800);}
+.update-url{font-size:12px;overflow-wrap:anywhere;}
+.update-row-head p{line-height:1.8;max-width:76ch;font-size:13px;}
+.update-note{color:var(--text-2);}
+.update-detail{border-top:1px solid var(--line);margin-top:20px;padding-top:4px;}
+.update-detail[hidden]{display:none;}
+.update-handling{display:grid;grid-template-columns:1fr 1fr;gap:32px;border-top:1px solid var(--line);padding:20px 0;}
+.update-handling form{display:grid;gap:14px;align-content:start;min-width:0;}
+.update-handling h3{font-size:16px;margin:0;}
+.update-handling form>button{justify-self:start;}
+.update-history{padding-top:12px;border-top:1px solid var(--line);}
+.update-history p{font-size:13px;line-height:1.9;white-space:pre-wrap;overflow-wrap:anywhere;}
+@media(max-width:700px){
+ .checklist-panel input,.checklist-panel textarea,.checklist-panel select,.updates-filter input,.updates-filter select,.update-handling input,.update-handling select,.update-handling textarea{font-size:16px;}
+ .checklist-item-head{align-items:flex-start;}
+ .checklist-panel summary,.update-history summary{min-height:44px;}
+ .updates-filter{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;}
+ .updates-filter label{flex:none;width:100%;min-width:0;}
+ .updates-inbox>ul>li{padding:18px;}
+ .update-row-head{flex-direction:column;gap:14px;}
+ .update-row-head>button{min-height:44px;}
+ .update-handling{grid-template-columns:1fr;gap:28px;}
+ .update-handling form>button{min-height:44px;}
+ .update-meta{gap:8px;}
+}

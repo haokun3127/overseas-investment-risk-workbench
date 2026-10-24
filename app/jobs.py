@@ -101,6 +101,7 @@ class Worker:
                            'parent_analysis_id':job.get('parent_analysis_id'),
                            'supplement_document_ids':list(dict.fromkeys(i['document_id'] for i in supplements)),
                            'rules_snapshot_origin':job.get('rules_snapshot_origin'),
+                           'evidence_checklist':json.loads(job.get('checklist_json') or '[]'),
                            'model_config':{'wire_api':self.settings.model_wire_api,'reasoning_effort':self.settings.model_reasoning_effort,'store':self.settings.model_store}}
             with self.store.db() as db:
                 version = db.execute('SELECT COALESCE(MAX(version),0)+1 FROM analyses WHERE document_id=?',(doc['id'],)).fetchone()[0]

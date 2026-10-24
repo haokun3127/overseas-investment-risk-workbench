@@ -2,7 +2,7 @@
 const $ = (s, root=document) => root.querySelector(s);
 const $$ = (s, root=document) => [...root.querySelectorAll(s)];
 const esc = v => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const names = {overview:'风险总览',events:'风险事件',documents:'资料与分析',evidence:'待补证',websites:'网站检索',knowledge:'知识库',jobs:'资料与分析',settings:'模型与规则',report:'风险简报'};
+const names = {overview:'风险总览',events:'风险事件',documents:'资料与分析',evidence:'待补证',updates:'网站更新待办',websites:'网站检索',knowledge:'知识库',jobs:'资料与分析',settings:'模型与规则',report:'风险简报'};
 const levels = {red:'高风险',orange:'中风险',yellow:'一般关注'};
 const statuses = {pending:'待复核',accepted:'已认可',needs_change:'需修正',queued:'排队中',running:'分析中',completed:'已完成',failed:'失败',cancelled:'已取消',risk:'发现风险',non_risk:'未发现风险',insufficient:'证据不足'};
 const state = {config:null,scope:'all',page:1,route:'overview',importMode:'file',filter:{},renderId:0,kq:'',ki:0};
@@ -446,9 +446,9 @@ async function render(options={}){
   const route=rawRoute==='jobs'?'documents':rawRoute;
   if(state.route!==route||state.routeKey!==location.hash){
     state.filter={};state.page=1;
-    if(['events','documents','knowledge','jobs','report','evidence'].includes(route)){
+    if(['events','documents','knowledge','jobs','report','evidence','updates'].includes(route)){
       const params=new URLSearchParams(routeSearch);
-      for(const key of ['q','level','category','review','date_from','date_to','status','policy','sort'])if(params.has(key))state.filter[key]=params.get(key);
+      for(const key of ['q','level','category','review','date_from','date_to','status','policy','sort','change'])if(params.has(key))state.filter[key]=params.get(key);
       state.page=Math.max(1,parseInt(params.get('page'),10)||1);
       if(['all','real','demo'].includes(params.get('demo')))state.scope=params.get('demo');
       else if(params.has('demo'))state.scope='all';
@@ -469,7 +469,7 @@ async function render(options={}){
     updateIdentity();
     $('#breadcrumb').innerHTML=`<span class="crumb-root">工作台 / </span><span class="crumb-page">${names[active]||'风险详情'}</span>${state.company?`<span class="crumb-company"> / 当前公司：${esc(state.company.name)}</span>`:''}`;
     let html='';
-    if(route==='websites'&&state.auth?.role==='company'){
+    if(['websites','updates'].includes(route)&&state.auth?.role==='company'){
       html=empty('该功能仅管理员可用','网站采集和管理是平台级功能，企业账号可继续使用知识库检索和本公司资料。','<a class="secondary" href="#knowledge">进入知识库</a>');
     }
     else if(route==='overview')html=await overview();
@@ -479,6 +479,7 @@ async function render(options={}){
     else if(route==='jobs')html=await jobsPage();
     else if(route==='websites')html=await websitePage();
     else if(route==='evidence')html=await evidencePage(id);
+    else if(route==='updates')html=await updatesPage();
     else if(route==='settings')html=await settings();
     else if(route==='report')html=await reportView();
     else html=empty('页面不存在','请从左侧导航选择工作区。','<a href="#overview" class="primary">返回总览</a>');
@@ -491,7 +492,7 @@ async function render(options={}){
     if(options.quiet)window.scrollTo(0,previousScroll);
     else if(routeChanged)window.scrollTo({top:0,behavior:'instant'});
     bindOperations();
-    bindEvidence();
+    bindEvidence();bindFollowups();
   }catch(e){if(renderId===state.renderId)$('#main').innerHTML=errorBox(e.message)+'<button class="secondary" id="retry-page">重新加载</button>';$('#retry-page')?.addEventListener('click',render);}
 }
 // Empty overview: the map slot becomes a standby card whose single action follows the workspace's real state.

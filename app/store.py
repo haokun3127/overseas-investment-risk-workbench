@@ -63,6 +63,16 @@ class Store:
                 supplement_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
                 analysis_id INTEGER NOT NULL REFERENCES analyses(id) ON DELETE CASCADE,
                 created_at TEXT NOT NULL, PRIMARY KEY(document_id,supplement_id));
+            CREATE TABLE IF NOT EXISTS evidence_checklist(
+                id INTEGER PRIMARY KEY, analysis_id INTEGER NOT NULL REFERENCES analyses(id) ON DELETE CASCADE,
+                title TEXT NOT NULL, category TEXT NOT NULL DEFAULT 'manual', excerpt TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'open', note TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS checklist_by_analysis ON evidence_checklist(analysis_id);
+            CREATE TABLE IF NOT EXISTS checklist_materials(
+                item_id INTEGER NOT NULL REFERENCES evidence_checklist(id) ON DELETE CASCADE,
+                supplement_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                PRIMARY KEY(item_id,supplement_id));
             """)
             columns = {row["name"] for row in db.execute("PRAGMA table_info(documents)")}
             for column, ddl in (
@@ -97,6 +107,7 @@ class Store:
                 ('rules_snapshot_origin', "TEXT NOT NULL DEFAULT ''"),
                 ('supplements_json', "TEXT NOT NULL DEFAULT '[]'"),
                 ('parent_analysis_id', 'INTEGER DEFAULT NULL'),
+                ('checklist_json', "TEXT NOT NULL DEFAULT '[]'"),
             ):
                 if column not in job_cols:
                     db.execute(f'ALTER TABLE jobs ADD COLUMN {column} {ddl}')
@@ -187,9 +198,15 @@ class Store:
         rules_json = db.execute("SELECT value FROM settings WHERE key='rules'").fetchone()['value']
         if not json.loads(rules_json)['confirmed']:
             raise ValueError('请先确认甲方风险分类分级规则。')
+        checklist=[]
+        if parent_analysis_id:
+            for item in db.execute('SELECT id,title,status,note,revision FROM evidence_checklist WHERE analysis_id=? ORDER BY id',(parent_analysis_id,)):
+                item=dict(item)
+                item['supplement_ids']=[r[0] for r in db.execute('SELECT supplement_id FROM checklist_materials WHERE item_id=? ORDER BY supplement_id',(item['id'],))]
+                checklist.append(item)
         return db.execute("""INSERT INTO jobs(document_id,status,created_at,company_json,rules_json,
-            rules_snapshot_origin,supplements_json,parent_analysis_id) VALUES (?,'queued',?,?,?,'submission',?,?)""",
-            (document_id,now(),company_json,rules_json,json.dumps(supplements or [],ensure_ascii=False),parent_analysis_id)).lastrowid
+            rules_snapshot_origin,supplements_json,parent_analysis_id,checklist_json) VALUES (?,'queued',?,?,?,'submission',?,?,?)""",
+            (document_id,now(),company_json,rules_json,json.dumps(supplements or [],ensure_ascii=False),parent_analysis_id,json.dumps(checklist,ensure_ascii=False))).lastrowid
 
     def supplement_snapshot(self, db, document_id):
         docs = db.execute('''SELECT d.*,o.company_id owner FROM document_evidence e

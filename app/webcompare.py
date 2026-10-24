@@ -65,3 +65,12 @@ def differences(current, previous):
         if rows:hunks.append(rows)
         if truncated:break
     return {'hunks':hunks,'added_characters':added,'removed_characters':removed,'truncated':truncated}
+
+
+def comparison(current,previous):
+    result=summary(current,previous)
+    fields=('id','run_id','title','url','fetched_at','method','archived_at')
+    result['current']={k:current[k] for k in fields}
+    result['previous']={k:previous[k] for k in fields} if previous else None
+    result.update(differences(current,previous) if result['status']=='changed' else {'hunks':[],'added_characters':0,'removed_characters':0,'truncated':False})
+    return result

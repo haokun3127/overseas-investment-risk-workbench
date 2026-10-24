@@ -11,6 +11,7 @@ from . import companies
 from .access import company_of, session_company
 from .ingest import insert_document, parse_file
 from .store import now
+from . import checklist
 
 MAX_SUPPLEMENT_TEXT = 24000
 MAX_SUPPLEMENTS = 10
@@ -102,6 +103,7 @@ def router(store, settings):
             (SELECT status FROM jobs WHERE document_id=d.id ORDER BY id DESC LIMIT 1) job_status'''+base+where+' ORDER BY a.id DESC LIMIT 20 OFFSET ?',values+[(page-1)*20])
         for row in rows:
             row['reasons'] = reasons(json.loads(row.pop('result_json'))) if row['decision']=='insufficient' else []
+            row['checklist']=store.one("SELECT count(*) total,coalesce(sum(status='open'),0) remaining FROM evidence_checklist WHERE analysis_id=?",(row['id'],))
         return {'items':rows,'total':total,'page':page,'page_size':20,'counts':counts}
 
     @api.get('/{analysis_id}')
@@ -116,6 +118,8 @@ def router(store, settings):
         row['active_job'] = store.one("SELECT id,status FROM jobs WHERE document_id=? AND status IN ('queued','running')",(row['document_id'],))
         row['editable'] = row['id']==row['latest_analysis_id'] and row['decision']=='insufficient' and not row['active_job']
         row['characters'] = sum(d['characters'] for d in row['supplements'])
+        row['checklist']=checklist.items(store,analysis_id)
+        row['checklist_suggestions']=checklist.suggestions(row['result']) if row['decision']=='insufficient' and not row['checklist'] else []
         return row
 
     @api.post('/{analysis_id}/supplements')
@@ -150,6 +154,8 @@ def router(store, settings):
             ensure_idle(db,row['document_id'])
             if not db.execute('DELETE FROM document_evidence WHERE document_id=? AND supplement_id=?',(row['document_id'],doc_id)).rowcount:
                 raise HTTPException(404,'补充材料不存在。')
+            db.execute('DELETE FROM checklist_materials WHERE supplement_id=? AND item_id IN (SELECT id FROM evidence_checklist WHERE analysis_id=?)',(doc_id,analysis_id))
+            db.execute("UPDATE evidence_checklist SET status='open',revision=revision+1,updated_at=?,updated_by=? WHERE analysis_id=? AND status='provided' AND NOT EXISTS(SELECT 1 FROM checklist_materials m WHERE m.item_id=evidence_checklist.id)",(now(),request.state.username,analysis_id))
         store.audit('evidence_unlinked',f'document={row["document_id"]}, supplement={doc_id}',company_id=row['company_id'])
         return {'ok':True}
 
@@ -177,4 +183,5 @@ def router(store, settings):
         store.audit('evidence_reanalysis',f'document={row["document_id"]}, analysis={analysis_id}, job={job_id}',company_id=row['company_id'])
         return {'id':job_id,'existing':False}
 
+    checklist.routes(api,store,case,ensure_idle)
     return api

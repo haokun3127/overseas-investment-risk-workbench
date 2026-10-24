@@ -25,7 +25,8 @@ from . import companies
 from .access import admin_only, session_company
 from .ingest import insert_document
 from .store import now
-from .webcompare import previous_page, summary as change_summary, differences
+from .webcompare import previous_page, summary as change_summary, comparison
+from . import updates
 
 AGENT = 'RiskWorkbenchBot'
 USER_AGENT = 'RiskWorkbenchBot/1.1'
@@ -754,6 +755,7 @@ def initialize(store):
         for table,column,ddl in (('web_pages','method',"TEXT NOT NULL DEFAULT ''"),('web_pages','archived_at',"TEXT NOT NULL DEFAULT ''"),('web_runs','stage',"TEXT NOT NULL DEFAULT ''")):
             if column not in {row['name'] for row in db.execute(f'PRAGMA table_info({table})')}: db.execute(f'ALTER TABLE {table} ADD COLUMN {column} {ddl}')
         db.execute("UPDATE web_runs SET status='failed',error='服务重启，采集已中断，请重新检索。',finished_at=? WHERE status='running'",(now(),))
+    updates.initialize(store)
 
 def queue_run(store,source,batch=''):
     with store.db() as db:
@@ -1006,6 +1008,7 @@ class Collector:
             if auto_kind!='none':
                 relevant=store.rows('SELECT id FROM web_pages WHERE run_id=? AND relevant=1',(run_id,))
                 if relevant: transfer(store,self.settings,[p['id'] for p in relevant],auto_kind,bool(source['auto_analyze']),company_id=target_company if auto_kind in ('event','both') else None)
+            updates.index_runs(store,run_id)
             store.audit('website_searched',f'id={run_id}, count={len(pages)}')
         except Exception as error:
             message=str(error) if isinstance(error,ValueError) else '采集异常：'+type(error).__name__
@@ -1240,14 +1243,10 @@ def router(store,settings):
         if current['status']!='completed':raise HTTPException(409,'请等待采集任务完成后再对比。')
         with store.db() as db:
             previous=previous_page(db,current,current['source_id'])
-        result=change_summary(current,previous)
-        fields=('id','run_id','title','url','fetched_at','method','archived_at')
-        result['current']={k:current[k] for k in fields}
-        result['previous']={k:previous[k] for k in fields} if previous else None
-        result.update(differences(current,previous) if result['status']=='changed' else {'hunks':[],'added_characters':0,'removed_characters':0,'truncated':False})
-        return result
+        return comparison(current,previous)
     @api.post('/import')
     def ingest(data:ImportInput,request:Request):
         company_id=(data.company_id or session_company(request)) if data.kind in ('event','both') else None
         return transfer(store,settings,data.page_ids,data.kind,data.analyze,company_id=company_id)
+    updates.routes(api,store,settings,transfer)
     return api

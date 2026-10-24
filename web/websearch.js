@@ -62,7 +62,7 @@ async function websitePage(){
   const all=sources.groups.reduce((n,g)=>n+g.count,0),filtered=webFilter.q||webFilter.category||webFilter.status;
   const closed=all&&!webEditorOpen;
   const health=await api('/web/health').catch(()=>null);
-  return heading('网站检索',`从已配置的 ${all} 个网站采集公开网页，AI 初筛后由人工核验入库。`,'<a class="secondary" href="#knowledge">查看知识库</a><a class="secondary" href="#events">查看风险事件</a>')+
+  return heading('网站检索',`从已配置的 ${all} 个网站采集公开网页，AI 初筛后由人工核验入库。`,'<a class="secondary" href="#updates">网站更新待办</a><a class="secondary" href="#knowledge">查看知识库</a><a class="secondary" href="#events">查看风险事件</a>')+
     collectionHealth(health)+
     '<ol class="collection-steps"><li><span class="step-num">01</span><div><strong>指定采集来源</strong><span>按分组管理站点与检索词；来源是否官方需自行核实</span></div></li><li><span class="step-num">02</span><div><strong>多通道抓取与 AI 初筛</strong><span>直连 + 渲染 + 网页存档兜底，AI 自动剔除导航页与无关页</span></div></li><li><span class="step-num">03</span><div><strong>核验后入库</strong><span>默认人工勾选入库；仅开启“自动保存”的网站会自动入库</span></div></li></ol>'+
     `<div class="web-workbench ${closed?'editor-closed':''}"><section class="panel web-sources-panel"><div class="panel-heading"><div><h2>采集网站库 <small>共 ${all} 个网站</small></h2></div><div class="actions"><div class="segmented" role="group" aria-label="显示方式"><button type="button" class="${webView==='cards'?'selected':''}" aria-pressed="${webView==='cards'}" data-web-view="cards">双列卡片</button><button type="button" class="${webView==='table'?'selected':''}" aria-pressed="${webView==='table'}" data-web-view="table">紧凑表格</button></div><button class="secondary small" id="open-web-import">批量导入</button><button class="primary small" id="new-web-source">添加网站</button></div></div>`+

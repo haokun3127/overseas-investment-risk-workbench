@@ -154,7 +154,7 @@ def create_app(settings=None, run_worker=True):
 
     @app.get('/api/release')
     def release():
-        return JSONResponse({'version':'20261024-evidence2'},headers={'Cache-Control':'no-store'})
+        return JSONResponse({'version':'20261024-followup2'},headers={'Cache-Control':'no-store'})
 
     @app.get('/api/health')
     def health(): return {'status':'ok'}
@@ -485,6 +485,7 @@ def create_app(settings=None, run_worker=True):
         for row in rows:
             row['rule_version']=json.loads(row.pop('rules_json') or '{}').get('version','')
             row['supplement_document_ids']=list(dict.fromkeys(c['document_id'] for c in json.loads(row.pop('supplements_json'))))
+            row['checklist_items']=len(json.loads(row.pop('checklist_json')))
         return {'items':rows,'total':total,'page':page,'page_size':100,
                 'active':store.one(active_sql,active_args)['n']}
 
