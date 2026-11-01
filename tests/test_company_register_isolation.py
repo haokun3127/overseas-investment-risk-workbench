@@ -62,8 +62,8 @@ def test_company_registration_and_strict_tenant_isolation(tmp_path, monkeypatch)
                 "reason": "涉及RKAB配额暂停风险",
                 "events": [{
                     "title": "RKAB配额核查逾期暂停采购风险",
-                    "category": "政策与监管",
-                    "level": "red",
+                    "category": "准入审批限制风险",
+                    "level": "lv1",
                     "summary": "逾期未交RKAB材料将暂停矿石采购",
                     "impact": "影响冶炼产线原料供应",
                     "recommendation": "按期提交RKAB核查材料",

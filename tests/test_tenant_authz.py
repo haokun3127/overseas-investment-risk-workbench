@@ -69,7 +69,7 @@ def analyse(app, c, doc_id, monkeypatch, captured=None):
             captured.append(payload)
         ref = [r['reference'] for r in payload['references'] if r['reference'].startswith('S')][0]
         return {'decision': 'risk', 'reason': '测试', 'events': [{
-            'title': '原料采购暂停风险', 'category': '政策与监管', 'level': 'orange', 'summary': '逾期暂停采购',
+            'title': '原料采购暂停风险', 'category': '准入审批限制风险', 'level': 'lv3', 'summary': '逾期暂停采购',
             'impact': '影响生产', 'recommendation': '按期提交',
             'evidence': [{'reference': ref, 'quote': '园区企业需在月底前提交年度核查材料', 'reason': '直接说明'}]}]}, {}
     monkeypatch.setattr('app.jobs.model.call_model', fake)

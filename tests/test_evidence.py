@@ -53,7 +53,7 @@ def test_complete_supplement_flow_preserves_history_and_citations(app,admin,monk
         captured.append(payload)
         ref=next(r for r in payload['references'] if r.get('role')=='supplement')
         return {'decision':'risk','reason':'补充正文提供了直接证据。','events':[{
-            'title':'原料采购暂停风险','category':'政策与监管','level':'orange','summary':'申报义务明确',
+            'title':'原料采购暂停风险','category':'准入审批限制风险','level':'orange','summary':'申报义务明确',
             'impact':'可能影响生产','recommendation':'核对并完成申报',
             'evidence':[{'reference':ref['reference'],'quote':'未申报将暂停原料采购','reason':'补充原文直接规定后果'}]}]},{}
     monkeypatch.setattr(model,'call_model',fake)

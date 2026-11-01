@@ -22,8 +22,9 @@ from .demo import seed
 from .enrich import Enricher
 from .ingest import insert_document, parse_file
 from .jobs import Worker
+from .vectors import Indexer, ensure as ensure_vectors, status as vector_status
 from .retrieval import annotate_hits, kind_label, retrieve
-from .store import DEFAULT_RULES, Store, now
+from .store import DEFAULT_RULES, LEVEL_LABELS, LEVEL_ORDER, LEVELS, Store, now
 from .websearch import Collector, initialize as initialize_websearch, router as websearch_router
 from . import websearch
 from .evidence import router as evidence_router
@@ -84,6 +85,8 @@ def create_app(settings=None, run_worker=True):
     initialize_websearch(store)
     collector=Collector(store,settings)
     enricher=Enricher(store,settings)
+    ensure_vectors(store)
+    indexer=Indexer(store,settings)
     login_attempts={}
     @asynccontextmanager
     async def lifespan(app):
@@ -91,14 +94,17 @@ def create_app(settings=None, run_worker=True):
             worker.start()
             collector.start()
             enricher.start()
+            indexer.start()
         yield
         await worker.stop()
         await collector.stop()
         await enricher.stop()
+        await indexer.stop()
     app=FastAPI(title='海外投资风险工作台',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.store=store; app.state.worker=worker; app.state.settings=settings
     app.state.collector=collector
     app.state.enricher=enricher
+    app.state.indexer=indexer
     app.include_router(websearch_router(store,settings))
     app.include_router(companies.router(store))
     app.include_router(evidence_router(store,settings))
@@ -276,7 +282,7 @@ def create_app(settings=None, run_worker=True):
                 'store_responses':settings.model_store if can_manage else None,
                 'role':'admin' if can_manage else 'company','can_manage':can_manage,
                 'rules':store.setting('rules'),
-                'retrieval':'服务端 BM25 文本检索：原文加入库时生成的中文摘要和关键词 + 中印英跨语言法规术语扩展','prompt_version':'risk-evidence-v1'}
+                'retrieval':'混合检索：向量相似度与 BM25；向量未建好时只用 BM25。中文摘要、关键词和中印英对照词仍参与关键词检索','prompt_version':model.PROMPT_VERSION}
 
     @app.put('/api/rules')
     async def rules(request:Request):
@@ -285,10 +291,10 @@ def create_app(settings=None, run_worker=True):
         if not isinstance(value,dict) or set(value)!= {'version','confirmed','categories','levels','notes'}:
             raise ValueError('规则字段须包含 version、confirmed、categories、levels、notes。')
         cats=value['categories']
-        if not isinstance(cats,list) or not 1<=len(cats)<=30 or any(not isinstance(c,str) or not c.strip() or len(c)>80 for c in cats) or len(set(cats))!=len(cats):
-            raise ValueError('分类须为1至30个不重复的名称。')
-        if not isinstance(value['levels'],dict) or set(value['levels'])!={'red','orange','yellow'} or any(not isinstance(v,str) or not v.strip() or len(v)>2000 for v in value['levels'].values()):
-            raise ValueError('请提供 red、orange、yellow 三个等级的判断标准。')
+        if not isinstance(cats,list) or not 1<=len(cats)<=80 or any(not isinstance(c,str) or not c.strip() or len(c)>80 for c in cats) or len(set(cats))!=len(cats):
+            raise ValueError('分类须为1至80个不重复的名称。')
+        if not isinstance(value['levels'],dict) or set(value['levels'])!=set(LEVELS) or any(not isinstance(v,str) or not v.strip() or len(v)>2000 for v in value['levels'].values()):
+            raise ValueError('请提供 I–V 级（lv1–lv5）五个等级的判断标准。')
         if type(value['confirmed']) is not bool or not isinstance(value['version'],str) or not 1<=len(value['version'])<=60 or not isinstance(value['notes'],str) or len(value['notes'])>5000:
             raise ValueError('规则版本、确认状态或说明格式不正确。')
         store.set_setting('rules',value); store.audit('rules_updated',value['version'])
@@ -548,7 +554,12 @@ def create_app(settings=None, run_worker=True):
                 except ValueError: raise ValueError('筛选日期须为 YYYY-MM-DD。')
         if date_from and date_to and date_from>date_to: raise ValueError('开始日期不能晚于结束日期。')
         if demo not in ('all','real','demo'): raise ValueError('数据范围无效。')
-        if level and level not in ('red','orange','yellow'): raise ValueError('风险等级无效。')
+        legacy_clause=''
+        if level=='legacy':
+            legacy_clause="e.level IN ('red','orange','yellow')"
+            level=''
+        elif level and level not in LEVEL_LABELS:
+            raise ValueError('风险等级无效。')
         if review and review not in ('pending','accepted','needs_change'): raise ValueError('复核状态无效。')
         conditions=[
             'a.id=(SELECT a2.id FROM analyses a2 WHERE a2.document_id=a.document_id ORDER BY version DESC LIMIT 1)',
@@ -558,6 +569,8 @@ def create_app(settings=None, run_worker=True):
         if company_id is not None:
             conditions.append('d.company_id=?')
             args.append(company_id)
+        if legacy_clause:
+            conditions.append(legacy_clause)
         for value,sql in [(q,'(e.title LIKE ? OR e.summary LIKE ?)'),(level,'e.level=?'),(category,'e.category=?'),(review,'e.review_status=?'),(date_from,'d.date>=?'),(date_to,'d.date<=?')]:
             if value:
                 conditions.append(sql)
@@ -661,7 +674,7 @@ def create_app(settings=None, run_worker=True):
             value=str(value or '')
             return "'"+value if value.lstrip().startswith(('=','+','-','@','\t','\r')) else value
         for row in rows:
-            writer.writerow([safe(v) for v in [row['id'],row['title'],{'red':'高风险','orange':'中风险','yellow':'一般关注'}.get(row['level'],row['level']),row['category'],row['summary'],row['impact'],row['recommendation'],{'pending':'待复核','accepted':'已认可','needs_change':'需修正'}[row['review_status']],row['review_note'],row['date'],row['source'],row['url'],row['version'],'虚构演示' if row['demo'] else '非演示数据', '\n'.join(r.get('quote','') for r in json.loads(row['evidence_json'])),row['date_source']]])
+            writer.writerow([safe(v) for v in [row['id'],row['title'],LEVEL_LABELS.get(row['level'],row['level']),row['category'],row['summary'],row['impact'],row['recommendation'],{'pending':'待复核','accepted':'已认可','needs_change':'需修正'}[row['review_status']],row['review_note'],row['date'],row['source'],row['url'],row['version'],'虚构演示' if row['demo'] else '非演示数据', '\n'.join(r.get('quote','') for r in json.loads(row['evidence_json'])),row['date_source']]])
         store.audit('events_exported',f'count={len(rows)}, scope={demo}, company={cid}',company_id=cid)
         return Response('﻿'+output.getvalue(),media_type='text/csv',headers={'Content-Disposition':'attachment; filename="risk-events.csv"'})
 
@@ -697,7 +710,8 @@ def create_app(settings=None, run_worker=True):
         base,args=events_query(demo,q,level,category,review,date_from,date_to,company_id=cid)
         total=store.one('SELECT COUNT(*) n'+base,args)['n']
         if total>500: raise HTTPException(400,'当前匹配超过500条，请缩小日期或分类范围后生成简报；完整台账可使用 CSV 导出。')
-        items=store.rows("SELECT e.*,d.date,d.date_source,d.source,d.url,d.demo,a.version,a.model,a.mode,a.rules_json,json_extract(c.profile_json,'$.name') company_name"+base+" ORDER BY CASE e.level WHEN 'red' THEN 0 WHEN 'orange' THEN 1 ELSE 2 END,d.date DESC,e.id DESC",args)
+        level_case=' '.join(f"WHEN '{key}' THEN {index}" for index,key in enumerate(LEVEL_ORDER))
+        items=store.rows("SELECT e.*,d.date,d.date_source,d.source,d.url,d.demo,a.version,a.model,a.mode,a.rules_json,json_extract(c.profile_json,'$.name') company_name"+base+f" ORDER BY CASE e.level {level_case} ELSE {len(LEVEL_ORDER)} END,d.date DESC,e.id DESC",args)
         for item in items:
             item['evidence']=json.loads(item.pop('evidence_json'))
             item['rule_version']=json.loads(item.pop('rules_json'))['version']
@@ -733,6 +747,7 @@ def create_app(settings=None, run_worker=True):
                 'fetch_proxy':bool(websearch.FETCH_PROXY),'renderer':bool(websearch.RENDERER),
                 'enrich_pending':store.one("SELECT COUNT(*) n FROM documents WHERE kind='knowledge' AND demo=0 AND quarantined_at IS NULL AND allow_external=1 AND zh_state=''")['n'],
                 'enrich_failed':store.one("SELECT COUNT(*) n FROM documents WHERE kind='knowledge' AND quarantined_at IS NULL AND zh_state='failed'")['n'],
+                'vectors':vector_status(store),
                 'model_error':model_error(),'last_analysis':store.one('SELECT created_at,model,mode FROM analyses ORDER BY id DESC LIMIT 1')}
 
     app.mount('/static',StaticFiles(directory=ROOT/'web'),name='static')

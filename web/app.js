@@ -2,21 +2,141 @@
 const $ = (s, root=document) => root.querySelector(s);
 const $$ = (s, root=document) => [...root.querySelectorAll(s)];
 const esc = v => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+const RISK_TREE = [
+  ['政治风险', [['政治稳定', ['政权更迭', '军事政变', '战争及内乱']], ['政府行为风险', ['政府征收和国有化风险', '汇兑限制', '政府腐败']], ['政府违约风险', ['中止/终止特许经营权', '财政偿债能力不足', '东道国违反合同风险']], ['国际关系风险', ['东道国被其他国家或国际组织制裁风险', '对华友好度', '地缘政治与大国博弈']]]],
+  ['法律风险', [['法律环境风险', ['法律政策变动', '法律透明度', '法律制度健全性']], ['外资管理风险', ['准入审批限制风险', '安全审查风险', '反垄断审查风险']], ['执法风险', ['执法效率', '执法力度']], ['司法风险', ['司法公平', '司法效率', '执行风险']], ['合规风险', ['腐败风险', '人权风险', '违反东道国其他法律被处罚', '与被制裁企业交易', '跨境数据流动']], ['合同风险', ['合同执行风险', '法律救济与适用风险']], ['知识产权风险', ['知识产权保护风险', '知识产权纠纷风险']]]],
+  ['社会风险', [['劳工风险', ['劳工组织维权风险', '劳工诉讼风险', '聘用当地或外籍员工要求']], ['环境保护风险', ['环保抗议风险', '环保诉讼风险', '环境行政审查风险']], ['宗教文化风险', ['宗教冲突风险', '文化冲突风险']], ['社会治安风险', ['社会动乱风险', '刑事犯罪风险']], ['重大公共卫生风险', ['人员流动性限制', '经济贸易限制', '其他限制性措施']]]],
+];
+function placeOf(category) {
+  for (const [family, groups] of RISK_TREE) {
+    for (const [group, items] of groups) {
+      if (items.includes(category)) return { family, group };
+    }
+  }
+  return { family: '', group: '' };
+}
+function familyOf(category) {
+  return placeOf(category).family;
+}
+function riskPath(category) {
+  const place = placeOf(category);
+  if (!place.family) return '';
+  return `${place.family} › ${place.group}`;
+}
+function riskTreeRow(level, label, name, countText, href) {
+  const inner = `<span class="risk-level-tag">${label}</span><span class="risk-tree-name">${esc(name)}</span><span class="risk-tree-count">${countText}</span>`;
+  if (href) return `<a class="risk-tree-row lv${level}" href="${href}">${inner}</a>`;
+  return `<div class="risk-tree-row lv${level}">${inner}</div>`;
+}
+function riskTreeOverview(categories) {
+  const counts = Object.fromEntries((categories || []).map((item) => [item.category, Number(item.count) || 0]));
+  const seen = new Set();
+  let hitGroups = 0;
+  let hitLeaves = 0;
+  let total = 0;
+  const rows = [];
+  RISK_TREE.forEach(([family, groups]) => {
+    const blocks = [];
+    let familyCount = 0;
+    groups.forEach(([group, items]) => {
+      const leaves = items.filter((name) => counts[name]).map((name) => {
+        seen.add(name);
+        return { name, count: counts[name] };
+      });
+      if (!leaves.length) return;
+      const groupCount = leaves.reduce((sum, item) => sum + item.count, 0);
+      familyCount += groupCount;
+      total += groupCount;
+      hitGroups += 1;
+      hitLeaves += leaves.length;
+      blocks.push({ group, groupCount, leaves });
+    });
+    if (!familyCount) {
+      rows.push(`<div class="risk-tree-row lv1 is-empty"><span class="risk-level-tag">一级</span><span class="risk-tree-name">${esc(family)}</span><span class="risk-tree-count">0 条 · 暂无事件</span></div>`);
+      return;
+    }
+    rows.push(riskTreeRow(1, '一级', family, `${familyCount} 条`));
+    blocks.forEach((block) => {
+      rows.push(riskTreeRow(2, '二级', block.group, `${block.groupCount} 条`));
+      block.leaves.forEach((leaf) => {
+        rows.push(riskTreeRow(3, '三级', leaf.name, `${leaf.count} 条`, eventHref({ category: leaf.name })));
+      });
+    });
+  });
+  const extra = Object.entries(counts).filter(([name, count]) => count && !seen.has(name));
+  if (extra.length) {
+    const extraCount = extra.reduce((sum, [, count]) => sum + count, 0);
+    total += extraCount;
+    hitLeaves += extra.length;
+    rows.push(riskTreeRow(1, '一级', '未归类', `${extraCount} 条`));
+    extra.forEach(([name, count]) => {
+      rows.push(riskTreeRow(3, '三级', name, `${count} 条`, eventHref({ category: name })));
+    });
+  }
+  const summary = `${RISK_TREE.length} 个一级 · 命中 ${hitGroups} 个二级 · ${hitLeaves} 个三级 · 共 ${total} 条`;
+  return { summary, html: `<div class="risk-tree">${rows.join('')}</div>` };
+}
+function familyOptions() {
+  const selected = state.filter.family || '';
+  const items = RISK_TREE.map(([name]) => `<option value="${esc(name)}" ${selected === name ? 'selected' : ''}>${esc(name)}</option>`).join('');
+  return `<option value="">全部一级</option>${items}`;
+}
+function categoryOptions(counts = {}) {
+  const known = new Set(RISK_TREE.flatMap(([, groups]) => groups.flatMap(([, items]) => items)));
+  const selected = state.filter.category || '';
+  const family = state.filter.family || '';
+  const extra = [...new Set([...(state.config?.rules?.categories || []), selected].filter((name) => name && !known.has(name)))];
+  const option = (name) => `<option value="${esc(name)}" ${selected === name ? 'selected' : ''}>${esc(name)}（${Number(counts[name] || 0)}）</option>`;
+  const trees = family ? RISK_TREE.filter(([name]) => name === family) : RISK_TREE;
+  const groups = trees.map(([fam, groups]) => groups.map(([group, items]) => `<optgroup label="${esc(`${fam} · ${group}`)}">${items.map(option).join('')}</optgroup>`).join('')).join('');
+  const legacy = !family && extra.length ? `<optgroup label="此前分类">${extra.map(option).join('')}</optgroup>` : '';
+  return `<option value="">全部类型</option>${groups}${legacy}`;
+}
 const names = {overview:'风险总览',events:'风险事件',documents:'资料与分析',evidence:'待补证',updates:'网站更新待办',websites:'网站检索',knowledge:'知识库',jobs:'资料与分析',settings:'模型与规则',report:'风险简报'};
-const levels = {red:'高风险',orange:'中风险',yellow:'一般关注'};
+const levels = {
+  lv1: 'I级 红色预警',
+  lv2: 'II级 黄色预警',
+  lv3: 'III级 蓝色预警',
+  lv4: 'IV级 灰色预警',
+  lv5: 'V级 绿色预警',
+};
+const legacyLevels = {
+  red: '高风险（旧标准）',
+  orange: '中风险（旧标准）',
+  yellow: '一般关注（旧标准）',
+};
+const levelLabels = { ...levels, ...legacyLevels };
+const levelOrder = [...Object.keys(levels), ...Object.keys(legacyLevels)];
+const levelRank = (level) => (levelOrder.includes(level) ? levelOrder.indexOf(level) : levelOrder.length);
 const statuses = {pending:'待复核',accepted:'已认可',needs_change:'需修正',queued:'排队中',running:'分析中',completed:'已完成',failed:'失败',cancelled:'已取消',risk:'发现风险',non_risk:'未发现风险',insufficient:'证据不足'};
-const state = {config:null,scope:'all',page:1,route:'overview',importMode:'file',filter:{},renderId:0,kq:'',ki:0};
+const state = {config:null,scope:'all',page:1,route:'overview',importMode:'file',filter:{},renderId:0,renderAbort:null,renderSignal:null,kq:'',ki:0};
 let toastTimer;
 function toast(message){$('#notice').textContent=message;$('#notice').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#notice').hidden=true,4500);}
+const API_TIMEOUT_MS=30000;
+function apiSignal(extra){
+  const timeout=AbortSignal.timeout(API_TIMEOUT_MS);
+  const parts=[timeout];
+  if(extra)parts.push(extra);
+  else if(state.renderSignal)parts.push(state.renderSignal);
+  return parts.length===1?parts[0]:AbortSignal.any(parts);
+}
 async function api(path, options={}){
   const headers={'X-Requested-With':'risk-workbench',...(options.headers||{})};
   if(options.body && !(options.body instanceof FormData)){headers['Content-Type']='application/json';options.body=JSON.stringify(options.body);}
   let response;
-  try{response=await fetch('api'+path,{...options,headers,signal:options.signal||AbortSignal.timeout(120000)});}
-  catch(e){throw new Error(e.name==='TimeoutError'?'请求超时。操作可能已被接收，请刷新列表确认后再重试。':'无法连接本地服务，请检查服务是否启动，再重试。');}
+  try{response=await fetch('api'+path,{...options,headers,signal:apiSignal(options.signal)});}
+  catch(e){
+    if(e.name==='AbortError')throw e;
+    throw new Error(e.name==='TimeoutError'?'请求超时。操作可能已被接收，请刷新列表确认后再重试。':'无法连接本地服务，请检查服务是否启动，再重试。');
+  }
   const data=await response.json().catch(()=>({detail:'服务响应无法读取。'}));
   if(!response.ok){
-    if(response.status===401 && !path.startsWith('/auth/')){await boot();}
+    if(response.status===401 && !path.startsWith('/auth/')){
+      const main=$('#main');
+      if(main?.querySelector('.loading'))main.innerHTML='';
+      await boot();
+    }
     const detail=Array.isArray(data.detail)?'输入内容格式不正确，请检查必填字段和长度。':data.detail;
     const error=new Error(detail||'请求失败，请稍后重试。');
     error.status=response.status;
@@ -24,7 +144,7 @@ async function api(path, options={}){
   }
   return presentationData(data);
 }
-function badge(value){return `<span class="badge ${esc(value)}">${esc(levels[value]||statuses[value]||value||'未分析')}</span>`;}
+function badge(value){return `<span class="badge ${esc(value)}">${esc(levelLabels[value]||statuses[value]||value||'未分析')}</span>`;}
 
 // Demo records are shown as they are, labelled, so they are never mistaken for real business data.
 function presentationData(value){return value;}
@@ -46,12 +166,14 @@ function eventHref(filter={}){return '#events?'+new URLSearchParams({...filter,d
 function openEvents(filter={}){const target=eventHref(filter);if(location.hash===target)render();else location.hash=target;}
 function severityChart(stats,count){
   let offset=0;
-  const segments=Object.keys(levels).map(level=>{
+  const legendLevels=Object.keys(levels);
+  const ringLevels=legendLevels.filter((level) => count[level]);
+  const segments=ringLevels.map((level) => {
     const amount=count[level]||0,percent=stats.total?amount/stats.total*100:0;
     const segment=percent?`<circle class="ring-segment ${level}" cx="92" cy="92" r="70" pathLength="100" stroke-dasharray="${percent} ${100-percent}" stroke-dashoffset="${-offset}"/>`:'';
     offset+=percent;return segment;
   }).join('');
-  return `<div class="severity-chart"><svg viewBox="0 0 184 184" class="severity-ring" role="img" aria-label="${Object.entries(levels).map(([v,l])=>`${l}${count[v]||0}条`).join('，')}"><circle class="ring-track" cx="92" cy="92" r="70"/>${segments}<circle class="ring-inner" cx="92" cy="92" r="53"/><text x="92" y="94" class="ring-total">${stats.total}</text><text x="92" y="117" class="ring-caption">风险事件</text></svg><div class="severity-legend">${Object.entries(levels).map(([v,l])=>`<a href="${eventHref({level:v})}" class="legend-row"><span class="dot ${v}"></span><span>${l}</span><strong>${count[v]||0}<small> 条</small></strong></a>`).join('')}</div></div>`;
+  return `<div class="severity-chart"><svg viewBox="0 0 184 184" class="severity-ring" role="img" aria-label="${legendLevels.map((v)=>`${levelLabels[v]}${count[v]||0}条`).join('，')}"><circle class="ring-track" cx="92" cy="92" r="70"/>${segments}<circle class="ring-inner" cx="92" cy="92" r="53"/><text x="92" y="94" class="ring-total">${stats.total}</text><text x="92" y="117" class="ring-caption">风险事件</text></svg><div class="severity-legend">${legendLevels.map((v)=>`<a href="${eventHref({level:v})}" class="legend-row"><span class="dot ${v}"></span><span>${levelLabels[v]}</span><strong>${count[v]||0}<small> 条</small></strong></a>`).join('')}</div></div>`;
 }
 function categoryNetwork(stats){
   if(!stats.categories.length)return empty('等待第一条风险信号','完成分析后，这里会展示风险类型及对应事件。','<a class="secondary" href="#documents">导入资料</a>');
@@ -104,6 +226,8 @@ function dateLabel(item={}){
   if(source==='feed')return `发布日期 ${value}（RSS）`;
   if(source==='api')return `发布日期 ${value}（官方接口）`;
   if(source==='page_meta')return `发布日期 ${value}（页面元数据）`;
+  if(source==='page_text')return `发布日期 ${value}（正文）`;
+  if(source==='archive')return `存档日期 ${value}（网页存档）`;
   return `资料日期 ${value}（来源未注明）`;
 }
 function dateStamp(item = {}) {
@@ -129,7 +253,16 @@ function updateIdentity() {
 }
 function demonstration(){return '<p class="demo-note" role="note">当前结果包含标有“演示”的内置虚构数据，不是真实风险。风险简报默认不纳入演示数据；不再需要时可在<a href="#settings">模型与规则</a>中一键清除。</p>';}
 function pagination(data){return `<div class="pagination"><span>共 ${data.total} 条 · 第 ${data.page} / ${Math.max(1,Math.ceil(data.total/data.page_size))} 页</span><div class="actions"><button class="secondary small" data-page="${data.page-1}" ${data.page<=1?'disabled':''}>上一页</button><button class="secondary small" data-page="${data.page+1}" ${data.page*data.page_size>=data.total?'disabled':''}>下一页</button></div></div>`;}
-function tableEvents(items,compact=false){return `<div class="table-wrap"><table><thead><tr><th>风险事件</th><th>等级</th>${compact?'':'<th>风险类型</th>'}<th>复核状态</th><th>资料日期（来源）</th></tr></thead><tbody>${items.map(e=>`<tr><td class="title-cell"><a class="event-link" href="#event/${e.id}">${esc(e.title)}</a>${demoTag(e.demo)}<span class="source-line">${esc(e.source||'来源未填写')}</span></td><td>${badge(e.level)}</td>${compact?'':`<td class="nowrap">${esc(e.category)}</td>`}<td>${badge(e.review_status)}</td><td class="date-cell">${dateStamp(e)}</td></tr>`).join('')}</tbody></table></div>`;}
+function tableEvents(items, compact = false) {
+  const typeHead = compact ? '' : '<th>风险类型</th>';
+  const rows = items.map((event) => {
+    const path = riskPath(event.category);
+    const underTitle = compact && path ? `<span class="risk-path">${esc(path)} › ${esc(event.category)}</span>` : '';
+    const typeCell = compact ? '' : `<td class="risk-type-cell"><span class="risk-leaf">${esc(event.category)}</span>${path ? `<span class="risk-path">${esc(path)}</span>` : ''}</td>`;
+    return `<tr><td class="title-cell"><a class="event-link" href="#event/${event.id}">${esc(event.title)}</a>${demoTag(event.demo)}<span class="source-line">${esc(event.source || '来源未填写')}</span>${underTitle}</td><td>${badge(event.level)}</td>${typeCell}<td>${badge(event.review_status)}</td><td class="date-cell">${dateStamp(event)}</td></tr>`;
+  }).join('');
+  return `<div class="table-wrap"><table><thead><tr><th>风险事件</th><th>等级</th>${typeHead}<th>复核状态</th><th>资料日期（来源）</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
 const authCopy = {
   company: { sub: '登录后仅显示贵司的资料、任务与风险事件。', submit: '登录企业工作区' },
   admin: { sub: '管理全部公司、全局网站来源、规则与模型配置。', submit: '以管理员身份登录' },
@@ -439,6 +572,10 @@ async function render(options={}){
   if($('#shell').hidden)return;
   const previousScroll=window.scrollY;
   const routeChanged=state.routeKey!==location.hash;
+  state.renderAbort?.abort();
+  const ac=new AbortController();
+  state.renderAbort=ac;
+  state.renderSignal=ac.signal;
   const renderId=++state.renderId;
   const [routePath,routeSearch='']=location.hash.slice(1).split('?');
   const parts=routePath.split('/');
@@ -448,7 +585,7 @@ async function render(options={}){
     state.filter={};state.page=1;
     if(['events','documents','knowledge','jobs','report','evidence','updates'].includes(route)){
       const params=new URLSearchParams(routeSearch);
-      for(const key of ['q','level','category','review','date_from','date_to','status','policy','sort','change'])if(params.has(key))state.filter[key]=params.get(key);
+      for(const key of ['q','level','category','review','date_from','date_to','status','policy','sort','change','family'])if(params.has(key))state.filter[key]=params.get(key);
       state.page=Math.max(1,parseInt(params.get('page'),10)||1);
       if(['all','real','demo'].includes(params.get('demo')))state.scope=params.get('demo');
       else if(params.has('demo'))state.scope='all';
@@ -493,7 +630,13 @@ async function render(options={}){
     else if(routeChanged)window.scrollTo({top:0,behavior:'instant'});
     bindOperations();
     bindEvidence();bindFollowups();
-  }catch(e){if(renderId===state.renderId)$('#main').innerHTML=errorBox(e.message)+'<button class="secondary" id="retry-page">重新加载</button>';$('#retry-page')?.addEventListener('click',render);}
+  }catch(e){
+    if(renderId!==state.renderId||e.name==='AbortError'||e.status===401)return;
+    $('#main').innerHTML=errorBox(e.message)+'<button class="secondary" id="retry-page">重新加载</button>';
+    $('#retry-page')?.addEventListener('click',render);
+  }finally{
+    if(state.renderSignal===ac.signal)state.renderSignal=null;
+  }
 }
 // Empty overview: the map slot becomes a standby card whose single action follows the workspace's real state.
 function signalStandby(stats,workspace){
@@ -544,7 +687,7 @@ async function overview(){
   const reviewed=Math.max(0,stats.total-stats.pending);
   const ratio=(n)=>(stats.total?n/stats.total:0);
   const percent=(n)=>`${Math.round(ratio(n)*100)}%`;
-  const notes={red:'优先核验影响范围',orange:'关注影响与应对',yellow:'保留关注与复核'};
+  const notes={lv1:'风险处置',lv2:'损失控制',lv3:'风险规避',lv4:'关注并监控',lv5:'无需处理'};
   const kpis=kpiCell({href:eventHref(),label:'已识别风险事件',value:stats.total,note:`${stats.documents} 条资料 · ${stats.pending} 条待复核`,share:ratio(reviewed),shareLabel:`复核 ${percent(reviewed)}`})
     +Object.entries(levels).map(([v,l])=>kpiCell({level:v,href:eventHref({level:v}),label:l,value:count[v]||0,note:notes[v],share:ratio(count[v]||0),shareLabel:`占 ${percent(count[v]||0)}`})).join('');
   const primary = pending
@@ -555,9 +698,11 @@ async function overview(){
   const rightRail = isEmpty ? '' :
     `<section class="panel review-panel"><div class="panel-heading"><h2>${icon('check')}业务复核</h2><a class="panel-link" href="${eventHref({review:'pending'})}">待办 ${icon('arrow')}</a></div><div class="review-summary"><span>待复核风险事件</span><a class="review-number" href="${eventHref({review:'pending'})}"><span data-count="${stats.pending}">${stats.pending}</span><small> 条</small>${icon('arrow')}</a><div class="review-progress-label"><span>已记录复核</span><strong>${reviewed} / ${stats.total}</strong></div><progress value="${reviewed}" max="${stats.total||1}" aria-label="已记录复核 ${reviewed} 条，共 ${stats.total} 条"></progress></div><a class="review-cta" href="${eventHref({review:'pending'})}">进入复核列表 ${icon('arrow')}</a></section>`
     +`<section class="panel severity-panel"><div class="panel-heading"><h2>风险等级构成</h2><small>点击等级查看</small></div>${severityChart(stats,count)}<div class="chart-footnote"><span>仅统计各资料的最新分析版本</span></div></section>`;
+  const tree = riskTreeOverview(stats.categories);
   const board = isEmpty
     ? `<section class="panel network-panel is-standby" aria-label="风险类型分布">${signalStandby(stats,workspace)}</section>`
     : `<section class="panel network-panel"><div class="panel-heading"><h2>${icon('overview')}风险类型分布</h2><small>基于当前资料</small></div>${categoryNetwork(stats)}</section>${rightRail}`;
+  const taxonomy = `<section class="panel taxonomy-panel"><div class="panel-heading"><h2>分类层级</h2><small>${tree.summary}</small></div>${tree.html}</section>`;
   return heading('风险总览','从风险信号到判断依据，让每一次分析可核验。',`<button class="secondary icon-button" data-refresh aria-label="刷新总览">${icon('refresh')}</button><a class="secondary" href="#events">查看全部事件</a>${primary}`)
     +'<div data-company-host></div>'
     +overviewScope()
@@ -565,14 +710,25 @@ async function overview(){
     +(state.scope!=='real'&&recent.some(e=>e.demo)?demonstration():'')
     +`<section class="stats kpi-strip" aria-label="风险统计">${kpis}</section>`
     +`<div class="analysis-board overview-bento${isEmpty?' is-empty':''}">${board}</div>`
+    +taxonomy
     +collectionHealth(state.collectionHealth)
     +`<section class="panel events-panel"><div class="panel-heading"><h2>${icon('risk')}最新风险事件</h2><a class="panel-link" href="${eventHref()}">全部事件 ${icon('arrow')}</a></div>${recent.length?tableEvents(recent,true):`<p class="events-empty">${icon('risk')}<span><strong>暂无风险事件</strong><span>分析完成后，最新 6 条会显示在这里</span></span><a class="text-button" href="#documents">查看资料队列${icon('arrow')}</a></p>`}</section>`;
 }
 async function eventList(){
+  if (state.filter.family && state.filter.category && familyOf(state.filter.category) !== state.filter.family) {
+    delete state.filter.category;
+  }
   const query=new URLSearchParams({...state.filter,page:state.page,demo:scopeValue()});
+  query.delete('family');
+  let counts = {};
+  try {
+    const overview = await api('/overview?' + new URLSearchParams({ demo: scopeValue() }));
+    counts = Object.fromEntries((overview.categories || []).map((item) => [item.category, item.count]));
+  } catch (_error) {
+    counts = {};
+  }
   const data=await api('/events?'+query);
-  const categories=[...new Set([...state.config.rules.categories,state.filter.category].filter(Boolean))];
-return heading('风险事件','逐条核验风险判断，查看来源并记录业务复核意见。','<a href="#documents" class="primary">导入新资料</a>')+scope()+`<section class="panel"><form class="filters" id="event-filter"><label class="search-field">搜索事件<input name="q" placeholder="输入事件标题或摘要" value="${esc(state.filter.q||'')}"></label><label>风险等级<select name="level"><option value="">全部等级</option>${Object.entries(levels).map(([v,l])=>`<option value="${v}" ${state.filter.level===v?'selected':''}>${l}</option>`).join('')}</select></label><label>复核状态<select name="review"><option value="">全部状态</option>${['pending','accepted','needs_change'].map(v=>`<option value="${v}" ${state.filter.review===v?'selected':''}>${statuses[v]}</option>`).join('')}</select></label><label>风险类型<select name="category"><option value="">全部类型</option>${categories.map(c=>`<option ${state.filter.category===c?'selected':''}>${esc(c)}</option>`).join('')}</select></label><label>开始日期<input type="date" name="date_from" value="${esc(state.filter.date_from||'')}"></label><label>结束日期<input type="date" name="date_to" value="${esc(state.filter.date_to||'')}"></label><button class="secondary small" type="submit">查询</button><button class="text-button" type="button" id="clear-filter">重置</button></form>${data.items.length?tableEvents(data.items):empty('没有符合条件的风险事件','尝试调整筛选条件，或在资料页导入并分析新资料。')}${pagination(data)}</section>`;
+return heading('风险事件','逐条核验风险判断，查看来源并记录业务复核意见。','<a href="#documents" class="primary">导入新资料</a>')+scope()+`<section class="panel"><form class="filters" id="event-filter"><label class="search-field">搜索事件<input name="q" placeholder="输入事件标题或摘要" value="${esc(state.filter.q||'')}"></label><label>风险等级<select name="level"><option value="">全部等级</option>${Object.entries(levels).map(([v,l])=>`<option value="${v}" ${state.filter.level===v?'selected':''}>${l}</option>`).join('')}</select></label><label>复核状态<select name="review"><option value="">全部状态</option>${['pending','accepted','needs_change'].map(v=>`<option value="${v}" ${state.filter.review===v?'selected':''}>${statuses[v]}</option>`).join('')}</select></label><label>一级风险<select name="family">${familyOptions()}</select></label><label>风险类型<select name="category">${categoryOptions(counts)}</select></label><label>开始日期<input type="date" name="date_from" value="${esc(state.filter.date_from||'')}"></label><label>结束日期<input type="date" name="date_to" value="${esc(state.filter.date_to||'')}"></label><button class="secondary small" type="submit">查询</button><button class="text-button" type="button" id="clear-filter">重置</button></form>${data.items.length?tableEvents(data.items):empty('没有符合条件的风险事件','尝试调整筛选条件，或在资料页导入并分析新资料。')}${pagination(data)}</section>`;
 }
 async function eventDetail(id){
   const e=await api('/events/'+encodeURIComponent(id));
@@ -630,17 +786,17 @@ async function documents(knowledge){
       : `${sourceButton(d.id,d.decision?'查看详细与结果':'查看详细')}<span data-job-actions>${docJobActionsHtml(d)}</span>${docDeleteHtml(d,false)}`;
     return `<tr data-doc-id="${d.id}">
       ${knowledge?'':`<td>${docSelectHtml(d)}</td>`}
-      <td class="title-cell">${esc(d.title)}${demoTag(d.demo)}${quarantineTag(d)}<span class="source-line">${esc(d.kind_label||'')}${d.kind_label?' · ':''}${esc(d.source||'来源未填写')}</span></td>
+      <td class="title-cell">${esc(d.title)}${demoTag(d.demo)}${quarantineTag(d)}${knowledge && !d.allow_external ? '<span class="web-tag muted">未授权 AI 使用</span>' : ''}<span class="source-line">${esc(d.kind_label||'')}${d.kind_label?' · ':''}${esc(d.source||'来源未填写')}</span></td>
       <td class="date-cell">${dateStamp(d)}</td>
       <td class="${knowledge?'zh-cell':''}" ${knowledge?'':`data-progress-cell`}>${knowledge?summary:docProgressCellHtml(d)}</td>
-      <td class="${knowledge?'scope-cell':'nowrap'}">${d.allow_external?'允许外部分析':'未授权 AI 使用'}</td>
+      ${knowledge ? '' : `<td class="nowrap">${d.allow_external?'允许外部分析':'未授权 AI 使用'}</td>`}
       <td><div class="document-actions">${actions}</div></td>
     </tr>`;
   }).join('');
   return heading(knowledge?'知识库':'资料与分析',knowledge?'保存政策、案例与业务资料，为风险分析提供可追溯的参考依据。':'上传或录入待研判资料，一键结合企业背景与知识库法规完成风险分析。')+
     `<div class="split"><section class="panel"><div class="panel-heading"><h2>${knowledge?'添加参考资料':'导入并分析资料'}</h2></div><div class="panel-content">${importForm(knowledge)}</div></section><section class="panel"><div class="panel-heading"><h2>${knowledge?'检索与使用说明':'导入与分析说明'}</h2></div><div class="panel-content form-note">${knowledge?'<p>已授权的资料入库后，由已配置的模型自动生成中文摘要和中文关键词，外文法规也可以用中文检索。检索在服务端完成，结果都能追溯原文。</p><p>风险分析只使用已授权的参考资料，引用的是原文片段，并随分析版本保存。</p>':'<ul><li>上传或录入时勾选“立即启动风险分析”，保存后自动进入后台分析并实时刷新进度。</li><li>分析时自动挂载贵司档案背景与知识库中最相关的印尼法规原文。</li><li>每条记录至少包含标题和正文；单条最多60000字符。</li><li>下方列表可直接查看分段分析进度、失败原因、取消排队或重新分析。</li></ul>'}<p>模型状态：<strong>${modelStatusText()}</strong><br>分类规则：${state.config.rules.confirmed?'已确认':'待甲方确认'}</p><a href="#settings">查看模型与规则设置</a></div></section></div>`+
     (knowledge?'<section class="panel knowledge-search-panel"><div class="panel-heading"><h2>知识库检索</h2><small>中文、印尼文和英文关键词均可</small></div><form id="knowledge-search" class="knowledge-search-bar"><label class="field">内容检索<input name="q" value="'+esc(state.kq||'')+'" required placeholder="检索资料标题、摘要和正文"></label><button class="primary small" type="submit">检索内容</button></form><section id="knowledge-results" class="kr" aria-live="polite"></section></section>':'')+
-    `<section class="panel"><div class="panel-heading"><h2>${knowledge?'参考资料':'资料与分析任务列表'} <small>${data.total} 条</small></h2>${knowledge?'':'<div class="actions"><button class="secondary small" data-refresh>刷新进度</button><button class="primary small" id="analyze-selected">分析所选资料</button></div>'}</div><form class="filters" id="document-filter"><label class="search-field">搜索资料<input name="q" value="${esc(state.filter.q||'')}" placeholder="按标题搜索"></label><button class="secondary small">查询</button></form><p id="list-stale" hidden>列表有新增或删除，<button type="button" class="text-button" data-refresh>点击刷新</button></p>${data.items.length?`<div class="table-wrap"><table><thead><tr>${knowledge?'':'<th><input type="checkbox" id="select-all" aria-label="选择当前页可分析资料"></th>'}<th>资料标题</th><th>日期（来源）</th><th>${knowledge?'中文摘要':'分析进度与结论'}</th><th>数据范围</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>`:empty(knowledge?'知识库还没有资料':'暂无待分析资料',knowledge?'导入甲方提供的政策法规或案例后，可以先检索检查内容。':'在上方上传文件或手动录入，勾选自动分析即可一键产出风险预警。')}${pagination(data)}</section>`;
+    `<section class="panel"><div class="panel-heading"><h2>${knowledge?'参考资料':'资料与分析任务列表'} <small>${data.total} 条</small></h2>${knowledge?'':'<div class="actions"><button class="secondary small" data-refresh>刷新进度</button><button class="primary small" id="analyze-selected">分析所选资料</button></div>'}</div><form class="filters" id="document-filter"><label class="search-field">搜索资料<input name="q" value="${esc(state.filter.q||'')}" placeholder="按标题搜索"></label><button class="secondary small">查询</button></form><p id="list-stale" hidden>列表有新增或删除，<button type="button" class="text-button" data-refresh>点击刷新</button></p>${data.items.length?`<div class="table-wrap"><table><thead><tr>${knowledge?'':'<th><input type="checkbox" id="select-all" aria-label="选择当前页可分析资料"></th>'}<th>资料标题</th><th>日期（来源）</th><th>${knowledge?'中文摘要':'分析进度与结论'}</th>${knowledge?'':'<th>数据范围</th>'}<th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>`:empty(knowledge?'知识库还没有资料':'暂无待分析资料',knowledge?'导入甲方提供的政策法规或案例后，可以先检索检查内容。':'在上方上传文件或手动录入，勾选自动分析即可一键产出风险预警。')}${pagination(data)}</section>`;
 }
 function docJobActionsHtml(d){
   if(d.demo||d.quarantined_at)return '';
@@ -761,6 +917,7 @@ function bind(){
   });
   $$('[data-demo]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{const d=await api('/demo',{method:'POST'});toast(`已载入 ${d.added} 条虚构演示案例`);await render({quiet:true});}catch(e){toast(e.message);b.disabled=false;}});
   $('#event-filter')?.addEventListener('submit',e=>{e.preventDefault();state.filter=Object.fromEntries(new FormData(e.currentTarget));state.page=1;openEvents(state.filter);});
+  $('#event-filter [name=family]')?.addEventListener('change',()=>{const form=$('#event-filter');state.filter=Object.fromEntries(new FormData(form));if(state.filter.category&&familyOf(state.filter.category)!==state.filter.family)delete state.filter.category;state.page=1;openEvents(state.filter);});
   $('#clear-filter')?.addEventListener('click',()=>{state.filter={};state.page=1;openEvents();});
   $('#document-filter')?.addEventListener('submit',e=>{e.preventDefault();state.filter=Object.fromEntries(new FormData(e.currentTarget));state.page=1;navigateList();});
   $$('[data-import-mode]').forEach(b=>b.onclick=()=>{state.importMode=b.dataset.importMode;render();});

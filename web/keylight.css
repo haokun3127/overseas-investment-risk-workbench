@@ -43,15 +43,11 @@
 }
 
 #shell .app-body {
-  background-color: #e7eef3;
+  background-color: var(--paper-100);
   background-image: none;
 }
-#shell .app-body::before {
-  display: block;
-  z-index: -1;
-  height: 220px;
-  background: linear-gradient(180deg, #101820 0%, #162433 72%, rgb(22 36 51 / 0) 100%);
-}
+#shell .app-body:not(:has(.in-deck))::before,
+#shell .app-body:not(:has(.in-deck))::after { display: none; }
 
 .sidebar[data-spotlight=on]::before { content: none; }
 
@@ -90,24 +86,7 @@ body[data-route=overview] #shell .user-mark {
 }
 #shell #model-status::before { background: var(--tide-500); box-shadow: 0 0 10px var(--tide-glow); }
 
-#shell .page-heading h1,
-body[data-route=overview] #shell .page-heading h1 {
-  font-size: 44px;
-  letter-spacing: -.035em;
-  background-image: linear-gradient(105deg, #fff 8%, #c8fff6 48%, #f3ddaa);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-#shell .page-heading p,
-body[data-route=overview] #shell .page-heading p { color: rgb(214 226 245 / 82%); }
-#shell .page-eyebrow,
-body[data-route=overview] #shell .page-eyebrow {
-  border-color: rgb(126 232 220 / 45%);
-  background: rgb(255 255 255 / 8%);
-  color: #d8fff8;
-  box-shadow: 0 0 22px rgb(60 207 192 / 35%);
-}
+#shell .page-heading p { color: var(--text-2); }
 
 #shell .panel:not(.network-panel),
 #shell .kpi-strip,
@@ -516,21 +495,39 @@ body[data-route=overview] #shell .scope-bar small { color: var(--text-2); }
 #shell .sidebar nav a.active .icon { color: #d5ece8; }
 #shell .sidebar .local-system > .icon { color: #7d9a94; }
 
-#shell .page-heading h1,
-body[data-route=overview] #shell .page-heading h1 {
+#shell .page-heading h1 {
   font-size: 32px;
   letter-spacing: -.02em;
   background: none;
-  color: #f3f6fa;
-  -webkit-text-fill-color: #f3f6fa;
+  color: var(--text);
+  -webkit-text-fill-color: currentColor;
 }
-#shell .page-eyebrow,
-body[data-route=overview] #shell .page-eyebrow {
-  background: rgb(255 255 255 / 6%);
-  border-color: rgb(255 255 255 / 10%);
-  color: rgb(214 226 236 / 78%);
+#shell .page-eyebrow {
+  border-color: var(--line);
+  background: var(--paper-50);
+  color: var(--text-3);
   box-shadow: none;
 }
+#shell .page-heading.in-deck h1 { color: #f3f6fa; }
+#shell .page-heading.in-deck p { color: var(--ink-text-2); }
+#shell .page-heading.in-deck .page-eyebrow {
+  border-color: rgb(255 255 255 / 10%);
+  background: rgb(255 255 255 / 6%);
+  color: var(--ink-text-3);
+}
+#shell .page-heading.in-deck .primary,
+#shell .page-heading.in-deck .primary:hover {
+  border-color: var(--tide-700);
+  background: var(--tide-700);
+  color: #fff;
+}
+#shell .library-summary { color: var(--text-2); }
+#shell .library-summary strong { color: var(--text); }
+#shell .library-summary.in-deck { color: var(--ink-text-2); }
+#shell .library-summary.in-deck strong { color: #fff; }
+#shell .detail-title:not(.in-deck) { color: var(--text); }
+#shell .metadata:not(.in-deck) { color: var(--text-2); }
+#shell .back-link:not(.in-deck) { color: var(--tide-700); }
 #shell #model-status::before { box-shadow: none; animation: none; }
 
 #shell .panel:not(.network-panel),
@@ -591,3 +588,16 @@ body[data-route=overview] #shell .page-eyebrow {
 #shell .cat-pill.active:hover {
   box-shadow: none;
 }
+
+/* 工作台内不播放动画。登录页和全局提示不在此范围。 */
+#shell *,
+#shell *::before,
+#shell *::after,
+#shell ~ dialog[open] { animation: none !important; }
+#shell :is(.primary, .secondary, .danger, .event-more-actions > summary)::before { content: none; }
+#shell :is(.primary, .secondary, .danger, .preview-button, .cat-pill, .company-admin-menu > summary, .collection-steps li, .web-source-card, .kr-item, .upload-area):hover,
+#shell :is(.primary, .secondary, .danger):hover > .icon,
+#shell .signal-network a:hover .network-node,
+#shell .kr-tick:hover { transform: none; }
+#shell .kpi-strip .stat::before,
+#shell .kpi-strip .stat::after { content: none; }

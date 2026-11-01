@@ -3,6 +3,7 @@ let webSelectedRun=null,webPoll=null,webRunsPoll=null,webSources=[],webEditorOpe
 let webView=(()=>{try{return localStorage.getItem('webView')||'cards';}catch{return 'cards';}})();
 const webMethods={direct:'直接抓取',archive:'网页存档',render:'浏览器渲染',api:'官方接口',rss:'RSS 订阅'};
 const webFilter={q:'',category:'',status:'',page:1},webRunPage={page:1};
+let webGroupNames = [];
 function modelStatusText(){return !state.config.configured?'模型待配置':state.config.last_success?'最近模型分析成功':'模型已配置 · 尚无分析记录';}
 function webDateLabel(p) {
   const source = { rss: 'feed', api: 'api' }[p.method] || 'page_meta';
@@ -22,8 +23,21 @@ function webStage(r){
   return r.stage==='review'?`AI 筛选中 ${r.judged??0} / ${r.pages??r.items?.length??0} 页`:`采集中 ${r.progress} / ${r.max_pages??r.config?.max_pages} 页`;
 }
 function webStatus(r){const stage=webStage(r);return badge(r.status)+(stage?`<span class="source-line">${stage}</span>`:'')+webReason(r.hint,r.error);}
-function webBatches(batches){
-  return (batches||[]).map(b=>`<div class="web-batch"><div><strong>分组“${esc(b.category||'未分组')}”批量检索</strong><span>第 ${Math.min(b.done+1,b.total)} / ${b.total} 个网站 · 已完成 ${b.done} · 排队 ${b.queued}</span></div><progress max="${b.total}" value="${b.done}"></progress>${b.queued?`<button class="text-button danger" data-web-batch="${esc(b.batch)}">取消本组剩余检索</button>`:''}</div>`).join('');
+function webBatchName(b) {
+  const raw = String(b.batch || '');
+  const at = raw.lastIndexOf('@');
+  const name = (at > 0 ? raw.slice(0, at) : String(b.category || raw)).trim() || '未命名批次';
+  return webGroupNames.includes(name) ? `分组“${name}”` : name;
+}
+function webBatches(batches) {
+  return (batches || []).map((b) => {
+    const name = webBatchName(b);
+    const total = Number(b.total) || 0;
+    const done = Number(b.done) || 0;
+    const cancel = b.queued ? `<button class="text-button danger web-batch-cancel" data-web-batch="${esc(b.batch)}">取消剩余</button>` : '';
+    return `<div class="web-batch"><div class="web-batch-body"><strong class="web-batch-name" title="${esc(name)}">${esc(name)}</strong>`
+      + `<div class="web-batch-progress"><span>已完成 ${done} / ${total}</span><progress max="${total}" value="${done}"></progress></div></div>${cancel}</div>`;
+  }).join('');
 }
 function keywordChips(kw){
   const parts=String(kw||'').split(/[,，、;；\s]+/).filter(Boolean).slice(0,6);
@@ -52,12 +66,56 @@ function webSourceCard(s){
     `<div class="wsc-actions"><button class="primary small" data-web-run="${s.id}" ${s.enabled?'':'disabled'}>开始检索</button>${s.last_run_id?`<button class="secondary small" data-web-detail="${s.last_run_id}">查看结果</button>`:''}<button class="text-button" data-web-edit="${s.id}">编辑</button><button class="text-button" data-web-toggle="${s.id}" data-enabled="${s.enabled?0:1}">${s.enabled?'停用':'启用'}</button><button class="text-button danger" data-web-delete="${s.id}">删除</button></div></div>`+
   `</article>`;
 }
+function webRunSide(r) {
+  const pages = Number(r.pages) || 0;
+  const relevant = Number(r.relevant) || 0;
+  const count = pages > 0 ? `<span class="wri-count ${relevant ? 'has-hit' : ''}">${pages} 页 · ${relevant} 命中</span>` : '';
+  return count + badge(r.status);
+}
+function webRunItem(r) {
+  const selected = webSelectedRun === r.id;
+  const tip = r.status === 'failed' && r.hint ? `${r.name}\n${r.hint}` : r.name;
+  return `<div class="web-run-item ${selected ? 'is-selected-row' : ''}" data-web-row="${r.id}" data-web-detail="${r.id}" role="option" tabindex="0" aria-selected="${selected}" title="${esc(tip)}">`
+    + `<div class="wri-main"><strong class="wri-name">${esc(r.name)}</strong><span class="wri-time">${when(r.created_at)}</span></div>`
+    + `<div class="wri-side">${webRunSide(r)}</div></div>`;
+}
 function webRunsPanel(runs){
-  return `<div class="panel-heading"><div><h2>最近检索任务 <small>共 ${runs.total} 次${runs.active?` · ${runs.active} 个运行中`:''}</small></h2></div><button class="secondary small" id="refresh-web-runs">刷新记录</button></div>${webBatches(runs.batches)}${runs.items.length?`<div class="web-runs-list" role="listbox" aria-label="最近检索任务">${runs.items.map(r=>`<div class="web-run-item ${webSelectedRun===r.id?'is-selected-row':''}" data-web-row="${r.id}" data-web-detail="${r.id}" role="option" tabindex="0" aria-selected="${webSelectedRun===r.id}"><div class="wri-main"><div class="wri-title"><strong>${esc(r.name)}</strong><span class="wri-id">#${r.id}</span></div><div class="wri-meta"><span>${when(r.created_at)}</span>${r.status==='failed'&&r.hint?`<span class="wri-err-text">· ${esc(r.hint)}</span>`:''}</div></div><div class="wri-side"><span class="hit-pill ${r.relevant?'has-hit':''}">${r.pages} 页 / ${r.relevant} 命中</span>${badge(r.status)}</div></div>`).join('')}</div>${webPager(runs,'runs')}`:empty('尚无检索记录','在上方任一网站卡片点击“开始检索”。')}`;
+  return `<div class="panel-heading"><div><h2>最近检索任务 <small>共 ${runs.total} 次${runs.active?` · ${runs.active} 个运行中`:''}</small></h2></div><button class="secondary small" id="refresh-web-runs">刷新记录</button></div>${webBatches(runs.batches)}${runs.items.length?`<div class="web-runs-list" role="listbox" aria-label="最近检索任务">${runs.items.map(webRunItem).join('')}</div>${webPager(runs,'runs')}`:empty('尚无检索记录','在上方任一网站卡片点击“开始检索”。')}`;
+}
+const WEB_GROUP_ORDER = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二'];
+function webGroupRank(name) {
+  const prefix = String(name || '').split('、')[0];
+  const index = WEB_GROUP_ORDER.indexOf(prefix);
+  return index < 0 ? 100 : index;
+}
+function webGroupFamily(name) {
+  const rank = webGroupRank(name);
+  if (rank >= 0 && rank <= 3) {
+    return '印尼国内法规与执法';
+  }
+  if (rank >= 4 && rank <= 7) {
+    return '国际规则与制裁';
+  }
+  if (rank >= 8 && rank <= 11) {
+    return '舆情、涉华与经贸';
+  }
+  return '其他分组';
+}
+function webGroupOptions(groups, selected) {
+  const sorted = [...groups].filter((group) => group.name).sort((a, b) => webGroupRank(a.name) - webGroupRank(b.name));
+  const families = ['印尼国内法规与执法', '国际规则与制裁', '舆情、涉华与经贸', '其他分组'];
+  return families.map((family) => {
+    const items = sorted.filter((group) => webGroupFamily(group.name) === family);
+    if (!items.length) {
+      return '';
+    }
+    return `<optgroup label="${esc(family)}">${items.map((group) => `<option value="${esc(group.name)}" ${group.name === selected ? 'selected' : ''}>${esc(group.name)}（${group.count}）</option>`).join('')}</optgroup>`;
+  }).join('');
 }
 async function websitePage(){
   const query=new URLSearchParams({q:webFilter.q,category:webFilter.category,status:webFilter.status,page:webFilter.page,size:24});
   const [sources,runs]=await Promise.all([api('/web/sources?'+query),api('/web/runs?page='+webRunPage.page)]);webSources=sources.items;
+  webGroupNames = sources.groups.map((group) => group.name).filter(Boolean);
   if(!webSelectedRun&&runs.items?.length)webSelectedRun=runs.items[0].id;
   const all=sources.groups.reduce((n,g)=>n+g.count,0),filtered=webFilter.q||webFilter.category||webFilter.status;
   const closed=all&&!webEditorOpen;
@@ -66,8 +124,7 @@ async function websitePage(){
     collectionHealth(health)+
     '<ol class="collection-steps"><li><span class="step-num">01</span><div><strong>指定采集来源</strong><span>按分组管理站点与检索词；来源是否官方需自行核实</span></div></li><li><span class="step-num">02</span><div><strong>多通道抓取与 AI 初筛</strong><span>直连 + 渲染 + 网页存档兜底，AI 自动剔除导航页与无关页</span></div></li><li><span class="step-num">03</span><div><strong>核验后入库</strong><span>默认人工勾选入库；仅开启“自动保存”的网站会自动入库</span></div></li></ol>'+
     `<div class="web-workbench ${closed?'editor-closed':''}"><section class="panel web-sources-panel"><div class="panel-heading"><div><h2>采集网站库 <small>共 ${all} 个网站</small></h2></div><div class="actions"><div class="segmented" role="group" aria-label="显示方式"><button type="button" class="${webView==='cards'?'selected':''}" aria-pressed="${webView==='cards'}" data-web-view="cards">双列卡片</button><button type="button" class="${webView==='table'?'selected':''}" aria-pressed="${webView==='table'}" data-web-view="table">紧凑表格</button></div><button class="secondary small" id="open-web-import">批量导入</button><button class="primary small" id="new-web-source">添加网站</button></div></div>`+
-    `<form class="filters web-filters" id="web-source-filter"><label class="search-field">搜索网站<input name="q" value="${esc(webFilter.q)}" placeholder="输入机构名称、域名网址或中英文关键词…"></label><label>所属分组<select name="category"><option value="">全部分组（${all}）</option>${sources.groups.map(g=>`<option value="${esc(g.name)}" ${g.name===webFilter.category?'selected':''}>${esc(g.name||'未分组')}（${g.count}）</option>`).join('')}</select></label><label>工作状态<select name="status"><option value="">全部状态</option>${Object.entries(webSourceStatuses).map(([key,label])=>`<option value="${key}" ${webFilter.status===key?'selected':''}>${label}</option>`).join('')}</select></label><button class="secondary small" type="submit">查询</button>${filtered?'<button class="text-button" type="button" id="reset-web-filter">重置</button>':''}${webFilter.category?`<button class="primary small" type="button" id="run-web-group">一键检索本组（${sources.total}）</button>`:''}</form>`+
-    `<div class="category-pills" role="group" aria-label="按分组快速筛选"><button type="button" class="cat-pill ${!webFilter.category?'active':''}" aria-pressed="${!webFilter.category}" data-cat-pill="">全部 <span>${all}</span></button>${sources.groups.filter(g=>g.name).map(g=>`<button type="button" class="cat-pill ${webFilter.category===g.name?'active':''}" aria-pressed="${webFilter.category===g.name}" data-cat-pill="${esc(g.name)}">${esc(g.name)} <span>${g.count}</span></button>`).join('')}</div>`+
+    `<form class="filters web-filters" id="web-source-filter"><label class="search-field">搜索网站<input name="q" value="${esc(webFilter.q)}" placeholder="输入机构名称、域名网址或中英文关键词…"></label><label>所属分组<select name="category"><option value="">全部分组（${all}）</option>${webGroupOptions(sources.groups, webFilter.category)}</select></label><label>工作状态<select name="status"><option value="">全部状态</option>${Object.entries(webSourceStatuses).map(([key,label])=>`<option value="${key}" ${webFilter.status===key?'selected':''}>${label}</option>`).join('')}</select></label><button class="secondary small" type="submit">查询</button>${filtered?'<button class="text-button" type="button" id="reset-web-filter">重置</button>':''}${webFilter.category?`<button class="primary small" type="button" id="run-web-group">一键检索本组（${sources.total}）</button>`:''}</form>`+
     `<div class="panel-content">${sources.items.length?(webView==='table'?webSourceTable(sources.items):`<div class="web-source-grid">${sources.items.map(webSourceCard).join('')}</div>`)+webPager(sources,'sources'):(filtered?empty('没有匹配的网站','请尝试调整搜索词或切换上方分组标签。'):empty('先添加一个网站','填入公开网站或栏目地址及关注关键词，或批量导入网址清单。'))}</div></section>`+
     `<section class="panel" id="web-import-panel" ${webImportOpen?'':'hidden'}><div class="panel-heading"><h2>批量导入网站</h2><button class="text-button" type="button" id="close-web-import">收起</button></div><form class="panel-content" id="web-import-sources"><p class="form-note">每行一个网站，用 Tab 或逗号分隔：<strong>分组, 名称, 网址, 关键词</strong>（只有三列时为 名称, 网址, 关键词）。可直接从表格复制粘贴，或选择 JSON / CSV 文件。已存在的网址会自动跳过。</p><label class="field">网址清单<textarea name="text" rows="8" placeholder="一、印尼国内	印尼法律部	https://kemenkum.go.id	peraturan regulation 法规"></textarea></label><label class="field">或选择文件<input type="file" name="file" accept=".json,.csv,.txt,.tsv"></label><div class="form-grid"><label class="field">每次最多访问页面<select name="max_pages"><option value="1">1 页</option><option value="5" selected>5 页</option><option value="10">10 页</option></select></label></div><label class="check-field"><input name="allow_external" type="checkbox" checked><span>允许将这些网站采集的正文发送至当前配置的外部AI服务进行筛选。</span></label><button class="primary" type="submit">导入</button><div id="web-import-sources-feedback" role="status"></div></form></section>`+
     `<section class="panel" id="web-source-editor" ${closed?'hidden':''}><div class="panel-heading"><h2 id="web-editor-title">添加网站</h2><button class="text-button" type="button" id="close-web-editor">收起配置</button></div><form class="panel-content" id="web-source-form"><input name="source_id" type="hidden"><label class="field">网站名称<input name="name" required maxlength="100" placeholder="例如：政策法规信息源"></label><label class="field">网站或栏目地址<input name="url" type="url" required maxlength="2000" placeholder="https://网站域名/栏目/"></label><label class="field">分组<input name="category" maxlength="60" list="web-groups" placeholder="例如：一、印尼国内"><datalist id="web-groups">${sources.groups.filter(g=>g.name).map(g=>`<option value="${esc(g.name)}">`).join('')}</datalist></label><label class="field">关键词或检索主题<textarea name="keywords" required maxlength="500" rows="3" placeholder="例如：进口限制、劳工政策、原料供应中断"></textarea></label><div class="form-grid"><label class="field">每次最多访问页面<select name="max_pages"><option value="1">1 页</option><option value="5">5 页</option><option value="10" selected>10 页</option><option value="20">20 页</option></select></label><label class="field">检索频率<select name="interval_hours"><option value="0">手动检索</option><option value="6">每 6 小时</option><option value="24">每天</option><option value="168">每周</option></select></label></div><label class="field">检索完成后<select name="auto_import"><option value="none" selected>核验后手动入库</option><option value="knowledge">自动保存至知识库</option><option value="event">自动保存为风险资料</option><option value="both">同时保存知识库和风险资料</option></select></label><label class="field" id="web-target-company" hidden>风险资料归属公司<select name="target_company_id"><option value="">请选择公司</option>${webCompanyOptions(null)}</select></label><label class="check-field"><input name="auto_analyze" type="checkbox"><span>对新入库的风险资料自动启动分析，结果进入风险事件列表。</span></label><label class="check-field"><input name="allow_external" type="checkbox" checked><span>允许将该网站采集的正文发送至当前配置的外部AI服务进行筛选和分析。</span></label><p class="form-note">只访问此域名及填写的栏目路径，遵守 robots.txt。支持网页、文本和 PDF；直连失败时会尝试备用出口和互联网档案馆快照。</p><button class="primary" type="submit">保存网站</button><div id="web-source-feedback" role="status"></div></form></section></div>`+
@@ -111,7 +168,7 @@ function bindWebRuns(){
     if(results){const back=document.createElement('button');back.id='return-web-source';back.type='button';back.className='secondary small';back.textContent='返回网站列表';back.onclick=()=>{b.focus({preventScroll:true});b.scrollIntoView({block:'center',behavior:'instant'});};$('.panel-heading .actions',results)?.prepend(back);}
   });
   $('#refresh-web-runs').onclick=refreshWebRuns;
-  $$('[data-web-batch]').forEach(b=>b.onclick=async()=>{if(!confirm('取消这一组中还在排队的检索？正在运行的网站会继续完成。'))return;b.disabled=true;try{const r=await api('/web/runs/batch/cancel',{method:'POST',body:{batch:b.dataset.webBatch}});toast(`已取消 ${r.cancelled} 个排队中的检索`);refreshWebRuns();}catch(e){toast(e.message);b.disabled=false;}});
+  $$('[data-web-batch]').forEach(b=>b.onclick=async()=>{if(!confirm('取消这一批中还在排队的检索？正在运行的网站会继续完成。'))return;b.disabled=true;try{const r=await api('/web/runs/batch/cancel',{method:'POST',body:{batch:b.dataset.webBatch}});toast(`已取消 ${r.cancelled} 个排队中的检索`);refreshWebRuns();}catch(e){toast(e.message);b.disabled=false;}});
   $$('[data-web-page^="runs:"]').forEach(b=>b.onclick=()=>{webRunPage.page=Number(b.dataset.webPage.split(':')[1]);refreshWebRuns();});
 }
 async function showWebRun(id){
@@ -121,12 +178,16 @@ async function showWebRun(id){
   try{
     const r=await api('/web/runs/'+id);if(state.route!=='websites'||webSelectedRun!==id)return;
     const active=['queued','running'].includes(r.status);
+    $$('[data-web-row]').forEach((el) => el.setAttribute('aria-selected', String(Number(el.dataset.webRow) === id)));
     const row=$('[data-web-row="'+id+'"]');
     if(row){
       row.classList.add('is-selected-row');
       const side=row.querySelector('.wri-side');
-      if(side)side.innerHTML=`<span class="hit-pill ${r.items.some(p=>p.relevant===1)?'has-hit':''}">${r.items.length} 页 / ${r.items.filter(p=>p.relevant===1).length} 命中</span>${badge(r.status)}`;
+      if (side) {
+        side.innerHTML = webRunSide({ pages: r.items.length, relevant: r.items.filter((p) => p.relevant === 1).length, status: r.status });
+      }
     }
+    const waiting = r.status === 'queued' || (r.status === 'running' && !r.items.length);
     const relItems=r.items.filter(p=>p.relevant===1);
     const otherItems=r.items.filter(p=>p.relevant!==1);
     const inKbCount=r.items.filter(p=>p.in_knowledge).length;
@@ -142,7 +203,11 @@ async function showWebRun(id){
       `<div class="wrc-foot"><span>抓取于 ${when(p.fetched_at)} · ${p.characters.toLocaleString('zh-CN')} 字符</span><div class="wrc-actions">${r.status==='completed'?`<button class="secondary small" data-web-compare="${p.id}" aria-expanded="false" aria-controls="compare-${p.id}">查看更新对比</button>`:''}<button class="secondary small" data-web-original="${p.id}">查看采集原文</button>${Object.entries(p.imports).map(([kind,doc])=>`<button class="secondary small" data-source="${doc}">${kind==='knowledge'?'查看知识库详情':'查看分析记录'}</button>`).join('')}</div></div><section id="compare-${p.id}" class="web-comparison" aria-label="正文版本对比" hidden></section>`+
     `</article>`;
 
-    target.innerHTML=`<div class="panel-heading"><div><h2>${esc(r.config.name)} <small>任务 #${r.id}</small></h2></div><div class="actions">${badge(r.status)}${active?`<button class="secondary small" id="cancel-web-run">取消检索</button>`:''}${!active&&r.items.some(p=>p.relevant===null)?`<button class="primary small" id="rereview-web-run">重新筛选</button>`:''}</div></div>`+
+    const runHeading=`<div class="panel-heading"><div><h2>${esc(r.config.name)} <small>任务 #${r.id}</small></h2></div><div class="actions">${badge(r.status)}${active?`<button class="secondary small" id="cancel-web-run">取消检索</button>`:''}${!active&&r.items.some(p=>p.relevant===null)?`<button class="primary small" id="rereview-web-run">重新筛选</button>`:''}</div></div>`;
+    const waitingNote = r.status === 'queued' ? '正在等待前面的网站' : webStage({ ...r, pages: 0 });
+    target.innerHTML = waiting
+      ? `${runHeading}<div class="panel-content"><p role="status" class="web-waiting">${waitingNote}<span>可离开页面稍后查看。</span></p>${r.error ? (r.hint ? `<div class="web-reason-box">${webReason(r.hint, r.error)}</div>` : errorBox(r.error)) : ''}</div>`
+      : runHeading+
       `<div class="panel-content">`+
       `<div class="wrd-summary-strip"><div class="wrd-stat"><span>已采集页面</span><strong>${r.items.length} <small>/ 最多 ${r.config.max_pages} 页</small></strong></div><div class="wrd-stat hit"><span>AI 筛选命中</span><strong>${relItems.length} <small>篇相关</small></strong></div><div class="wrd-stat"><span>已存知识库（含历史）</span><strong>${inKbCount} <small>篇</small></strong></div><div class="wrd-kw"><span>检索词与模型</span><div class="wsc-keywords">${keywordChips(r.config.keywords)}${r.model?`<span class="wsc-meta-pill">${esc(r.model)}</span>`:''}</div></div></div>`+
       (r.status==='completed'&&r.items.length?changeControls(r.items):'')+

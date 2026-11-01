@@ -421,16 +421,55 @@ def loose(text):
     quotes do not count (models reflow PDF and RSS text)."""
     return ' '.join(unicodedata.normalize('NFKC',text).translate(QUOTE_MARKS).split())
 
+_MONTHS = {
+    'januari': 1, 'februari': 2, 'maret': 3, 'april': 4, 'mei': 5, 'juni': 6,
+    'juli': 7, 'agustus': 8, 'september': 9, 'oktober': 10, 'november': 11, 'desember': 12,
+    'january': 1, 'february': 2, 'march': 3, 'may': 5, 'june': 6, 'july': 7,
+    'august': 8, 'october': 10, 'december': 12,
+}
+_MONTH_PATTERN = '|'.join(sorted(_MONTHS, key=len, reverse=True))
+
+def _valid_date(year, month, day):
+    try:
+        from datetime import date
+        found = date(int(year), int(month), int(day))
+    except (TypeError, ValueError):
+        return ''
+    if found.year < 1900 or found.year > 2027:
+        return ''
+    return found.isoformat()
+
+def scan_date(text):
+    """First publication-like date in a short string. Bare numbers and relative words stay empty."""
+    text = text or ''
+    zh = re.search(r'(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日', text)
+    if zh:
+        return _valid_date(zh.group(1), zh.group(2), zh.group(3))
+    written = re.search(rf'(\d{{1,2}})\s+({_MONTH_PATTERN})\s+(\d{{4}})', text, re.I)
+    if written:
+        return _valid_date(written.group(3), _MONTHS[written.group(2).lower()], written.group(1))
+    return ''
+
+def find_publication_date(title, body):
+    """A date written as the document's own date, ignoring a webpage-archive stamp in the title."""
+    heading = re.sub(r'^［网页存档\s+\d{4}-\d{2}-\d{2}］', '', title or '')
+    window = f'{heading}\n{(body or "")[:600]}'
+    found = scan_date(window)
+    return (found, 'page_text') if found else ('', '')
+
 def normal_date(value):
     """YYYY-MM-DD from ISO, RFC 822 (RSS pubDate) or similar dates; '' when it cannot be read."""
     value=(value or '').strip()
+    if not value:
+        return ''
     m=re.match(r'(\d{4})-(\d{2})-(\d{2})',value)
     if m: candidate=m.group(0)
     else:
         try:
             from email.utils import parsedate_to_datetime
             candidate=parsedate_to_datetime(value).date().isoformat()
-        except (TypeError,ValueError,IndexError): return ''
+        except (TypeError,ValueError,IndexError):
+            return scan_date(value)
     try:
         from datetime import date
         date.fromisoformat(candidate);return candidate
@@ -455,9 +494,10 @@ class PageParser(HTMLParser):
         if tag=='title': self.in_title=True
         if tag=='a' and attrs.get('href'):
             self.links.append(attrs['href']);self.anchor=attrs['href'];self.anchors.setdefault(self.anchor,attrs.get('title') or '')
-        if tag=='meta' and attrs.get('property',attrs.get('name')) in ('article:published_time','date','pubdate'):
-            value=attrs.get('content','')[:10]
-            if re.fullmatch(r'\d{4}-\d{2}-\d{2}',value): self.date=value
+        if tag=='meta' and attrs.get('property',attrs.get('name')) in ('article:published_time','date','pubdate','article:modified_time'):
+            self.date=self.date or normal_date(attrs.get('content',''))
+        if tag=='time' and attrs.get('datetime'):
+            self.date=self.date or normal_date(attrs.get('datetime',''))
         if tag in ('p','br','div','li','h1','h2','h3','article','section'): self.text.append('\n')
     def handle_endtag(self,tag):
         if tag in ('script','style','nav','header','footer','noscript','svg'): self.skip=max(0,self.skip-1)
@@ -787,12 +827,17 @@ def transfer(store,settings,page_ids,kind,analyze=False,company_id=None):
         imports=json.loads(page['imports_json'])
         for target in (['knowledge','event'] if kind=='both' else [kind]):
             page_date=normal_date(page['date'])
+            date_source=({'rss':'feed','api':'api'}.get(page.get('method') or '','page_meta') if page_date else '')
+            if not page_date:
+                page_date, date_source = find_publication_date(page['title'], page['body'])
             archived_at=page.get('archived_at') or ''
             if not archived_at:
                 match=re.match(r'^［网页存档\s+(\d{4}-\d{2}-\d{2})］',page['title'] or '')
                 archived_at=match.group(1) if match else ''
+            if not page_date and archived_at:
+                page_date, date_source = archived_at, 'archive'
             meta={
-                'date_source':({'rss':'feed','api':'api'}.get(page.get('method') or '','page_meta') if page_date else ''),
+                'date_source': date_source,
                 'archived_at':archived_at,
                 'fetched_at':page.get('fetched_at') or '',
             }
@@ -954,8 +999,9 @@ class Collector:
                     if len(body.strip())<20: raise ValueError('页面无足够可提取正文，可能需要登录或动态渲染。')
                     if archived and CHALLENGE.search(title+' '+body[:500]): raise ValueError('网页存档中保存的也是人机验证页面。')
                     title=(('［网页存档 '+archived+'］') if archived else '')+(title or final)
-                    if 'html' in ctype.lower() and navigation_page(final,parser,body): navs.append((final,title,body,parser.date,raw,ctype,how))
-                    elif not self.keep(run_id,pages,final,title,body,parser.date,raw,ctype,how,archived=archived): continue
+                    page_date=parser.date or find_publication_date(title, body)[0]
+                    if 'html' in ctype.lower() and navigation_page(final,parser,body): navs.append((final,title,body,page_date,raw,ctype,how))
+                    elif not self.keep(run_id,pages,final,title,body,page_date,raw,ctype,how,archived=archived): continue
                     for href in parser.links:
                         try: link=clean_url(urljoin(final,href))
                         except ValueError:continue
