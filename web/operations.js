@@ -1,6 +1,6 @@
 'use strict';
 // Work queues and compact context use existing permissions and business actions.
-const webSourceStatuses={unrun:'尚未运行',failed:'最近检索失败',undecided:'待人工判定',active:'正在检索',completed:'最近检索完成',scheduled:'已开启定时',manual:'仅手动触发',disabled:'已停用'};
+const webSourceStatuses={unrun:'尚未运行',failed:'最近检索失败',undecided:'未筛选',active:'正在检索',completed:'最近检索完成',scheduled:'已开启定时',manual:'仅手动触发',disabled:'已停用'};
 function overviewScope(){
   const scoped=state.auth?.role==='company';
   return `<div class="overview-scope">统计范围：${scoped?'本公司':`全部公司（${state.overviewScope?.company_count??'—'} 家）`}<span>${scoped?'':'背景公司仅用于新分析，不会过滤统计'}</span></div>`;
@@ -16,7 +16,7 @@ function collectionHealth(h){
   const days=elapsed==null?null:Math.max(0,Math.floor(elapsed/86400000));
   const stale=days!=null&&days>=2;
   const queue=(key,label,n)=>`<a href="#websites?status=${key}"><span>${label}</span><strong>${n??0}</strong>${icon('arrow')}</a>`;
-  return `<section class="collection-health ${stale?'is-stale':''}" aria-label="采集动态"><div class="collection-health-head"><h2>采集动态</h2><span>${h.active?`${h.active} 个检索任务执行中`:h.scheduled?`${h.scheduled} 个网站已开启定时`:'当前为手动采集'}</span></div><div class="collection-times"><p><span>最近采集成功</span><strong>${h.last_success?when(h.last_success):'尚无成功记录'}</strong>${stale?`<span class="stale-note">已 ${days} 天未更新</span>`:''}</p><p><span>最近分析完成</span><strong>${h.last_analysis?when(h.last_analysis):'尚无分析记录'}</strong></p></div><nav aria-label="采集工作队列">${queue('failed','最近失败',h.latest_failed)}${queue('unrun','未运行',h.unrun)}${queue('undecided','待判定',h.undecided)}${queue('scheduled','定时网站',h.scheduled)}</nav></section>`;
+  return `<section class="collection-health ${stale?'is-stale':''}" aria-label="采集动态"><div class="collection-health-head"><h2>采集动态</h2><span>${h.active?`${h.active} 个检索任务执行中`:h.scheduled?`${h.scheduled} 个网站已开启定时`:'当前为手动采集'}</span></div><div class="collection-times"><p><span>最近采集成功</span><strong>${h.last_success?when(h.last_success):'尚无成功记录'}</strong>${stale?`<span class="stale-note">已 ${days} 天未更新</span>`:''}</p><p><span>最近分析完成</span><strong>${h.last_analysis?when(h.last_analysis):'尚无分析记录'}</strong></p></div><nav aria-label="采集工作队列">${queue('failed','最近失败',h.latest_failed)}${queue('unrun','未运行',h.unrun)}${queue('undecided','未筛选',h.undecided)}${queue('scheduled','定时网站',h.scheduled)}</nav></section>`;
 }
 let versionTimer=null,versionDismissed=false;
 async function checkRelease(){

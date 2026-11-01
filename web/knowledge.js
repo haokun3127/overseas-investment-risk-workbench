@@ -86,7 +86,7 @@ function krWindowHtml(hit, window) {
 
 function renderReaderList(data, groups) {
   const shown = groups.length;
-  const head = `<header class="kr-head"><span class="kr-count">命中 ${data.total_documents} 份资料 · 显示前 ${Math.min(data.limit, data.items.length)} 份${shown < data.items.length ? `（合并为 ${shown} 组）` : ''} · 检索词“${esc(data.query)}”</span><button type="button" class="text-button" data-kr-collapse>收起</button><p class="kr-disclaimer">排序依据文本匹配程度，不代表准确率、法规有效性或风险概率。</p></header>`;
+  const head = `<header class="kr-head"><span class="kr-count">命中 ${data.total_documents} 份资料 · 显示前 ${Math.min(data.limit, data.items.length)} 份${shown < data.items.length ? `（合并为 ${shown} 组）` : ''} · 检索词“${esc(data.query)}”</span><button type="button" class="text-button" data-kr-collapse>收起</button></header>`;
   if (!groups.length) {
     return head + empty('没有匹配的资料', '可以用中文或资料原文的关键词检索；外文资料生成中文摘要后即可用中文检索。');
   }

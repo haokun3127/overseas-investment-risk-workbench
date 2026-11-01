@@ -150,14 +150,14 @@ function badge(value){return `<span class="badge ${esc(value)}">${esc(levelLabel
 function presentationData(value){return value;}
 
 // Analysis is refused until the client's classification rules are confirmed: say so where work starts.
-function rulesAlert(){return state.config?.rules?.confirmed?'':'<div class="setup-alert" role="alert"><div><strong>风险分类分级规则尚未确认</strong><span>规则经甲方确认前，所有风险分析都无法启动，网站检索结果也不能“保存后分析”。资料导入、网站检索和知识库不受影响。</span></div><a class="primary small" href="#settings">去确认规则</a></div>';}
+function rulesAlert(){return state.config?.rules?.confirmed?'':'<div class="setup-alert" role="alert"><div><strong>风险分类分级规则尚未确认</strong><span>规则确认前，所有风险分析都无法启动，网站检索结果也不能“保存后分析”。资料导入、网站检索和知识库不受影响。</span></div><a class="primary small" href="#settings">去确认规则</a></div>';}
 function demoTag(demo){return demo?'<span class="badge demo-tag" title="内置虚构演示数据，不是真实风险">演示</span>':'';}
 function when(date){return date?new Date(date).toLocaleString('zh-CN',{hour12:false}):'—';}
 function errorBox(message){return `<div class="error" role="alert">${esc(message)}</div>`;}
 function icon(name){return `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;}
 const eyebrows={风险事件:'RISK LEDGER · 逐条核验',资料与分析:'INTAKE · 资料研判',知识库:'ARCHIVE · 法规与案例',网站检索:'WATCH · 公开来源采集',风险简报:'BRIEFING · 对外简报',模型与规则:'CONFIG · 模型与规则',分析任务:'QUEUE · 后台任务'};
 function stamp(){return new Date().toLocaleString('zh-CN',{hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});}
-function heading(title,subtitle,actions='',showEyebrow=true){
+function heading(title,subtitle,actions='',showEyebrow=false){
   const eyebrow=title==='风险总览'?`INDONESIA · 海外投资风险研判 · 页面刷新 ${stamp()}`:(eyebrows[title]||'WORKBENCH');
   return `<div class="page-heading"><div>${showEyebrow?`<div class="page-eyebrow"><span class="label-dot" aria-hidden="true"></span>${eyebrow}</div>`:''}<h1>${title}</h1><p>${subtitle}</p></div><div class="actions">${actions}</div></div>`;
 }
@@ -294,11 +294,11 @@ function renderAuthShell() {
     '<aside class="auth-brand-panel" aria-label="产品说明" data-stage="static">' +
     '<div class="auth-stage-field" aria-hidden="true"><span class="auth-lamp"></span><span class="auth-iso"></span></div>' +
     `<div class="auth-logo"><span class="auth-logo-mark">${icon('mark')}</span><span class="auth-logo-word">海外投资风险分析工作台</span></div>` +
-    '<div class="auth-pitch"><p class="auth-eyebrow"><span class="label-dot" aria-hidden="true"></span>INDONESIA · 海外投资风险研判</p>' +
+    '<div class="auth-pitch">' +
     '<h2 class="auth-headline"><span class="auth-line"><span>从风险信号</span></span><span class="auth-line"><span class="auth-gild">到判断依据</span></span></h2>' +
     '<p class="auth-lede">风险事件关联原文片段，经业务人员复核后进入风险简报，让每一次分析可核验。</p>' +
     `<ul class="auth-facts">${fact('01', '每条风险都能追溯到原文')}${fact('02', '分析结论需经业务复核')}${fact('03', '资料与结果保存在工作台服务器')}</ul></div>` +
-    '<p class="auth-legal">分析结果供业务复核参考，判断依据请以原始资料为准。<span class="auth-credit">背景为程序生成的抽象光场，不表示任何地理边界或实时数据。</span></p></aside>' +
+    '</aside>' +
     '<div class="auth-main"><section class="auth-panel" aria-labelledby="auth-title"></section></div></div>';
   const split = $('.auth-split', host);
   setTimeout(() => split.classList.remove('is-entering'), 1200);
@@ -734,7 +734,7 @@ async function eventDetail(id){
   const e=await api('/events/'+encodeURIComponent(id));
   state.currentEvent=e;
   return `<a class="back-link" href="#events">返回风险事件</a><h1 class="detail-title">${esc(e.title)}</h1><div class="metadata">${badge(e.level)}<span>${esc(e.category)}</span><span>${esc(dateLabel(e))}</span><span>${esc(e.source||'来源未填写')}</span>${demoTag(e.demo)}</div>`+
-    (e.quarantined_at?'<div class="notice-inline">来源资料已隔离（待核实），本事件不计入统计、列表和简报。原因：'+esc(e.quarantine_reason||'未填写')+'</div>':'')+
+    (e.quarantined_at?'<div class="notice-inline">来源资料已隔离，本事件不计入统计、列表和简报。原因：'+esc(e.quarantine_reason||'未填写')+'</div>':'')+
     (!e.is_latest?'<div class="notice-inline">这是历史版本，最新分析结果请从风险列表查看。</div>':'')+
     (e.result.partial_context?'<div class="notice-inline">这份长资料已分段分析。跨段关联及事件重复需人工核验。</div>':'')+
     `<div class="detail-grid"><div><section class="panel">${[['事件摘要',e.summary],['潜在影响',e.impact],['初步应对建议',e.recommendation]].map(([title,text])=>`<section class="detail-section"><h2>${title}</h2><p>${esc(text)}</p></section>`).join('')}</section><section class="panel"><div class="panel-heading"><h2>业务复核</h2>${badge(e.review_status)}</div><form id="review-form" class="panel-content review-form" data-id="${e.id}"><div class="form-grid"><label class="field">复核结论<select name="status">${['pending','accepted','needs_change'].map(v=>`<option value="${v}" ${e.review_status===v?'selected':''}>${statuses[v]}</option>`).join('')}</select></label><label class="field full">复核意见<textarea name="note" rows="3" maxlength="2000" placeholder="记录判断分歧、需要补充的资料或修正建议">${esc(e.review_note)}</textarea></label></div><div class="form-actions"><button class="primary" type="submit">保存复核意见</button><small>${e.reviewed_at?'上次保存 '+when(e.reviewed_at):'尚未记录复核意见'}</small></div><div id="review-error"></div></form></section></div><div><section class="panel"><div class="panel-heading"><h2>判断依据与来源</h2><small>${e.evidence.length} 条引用</small></div>${e.evidence.map((r,i)=>`<article class="evidence"><span class="ref">引用 ${i+1} · ${esc(evidenceLabel(r))}</span><h3>${esc(r.title)}</h3><blockquote>${esc(r.quote)}</blockquote><p>${esc(r.reason)}</p><small>${esc(r.locator)}</small><br>${sourceButton(r.document_id,'定位原文',r.quote)}</article>`).join('')}</section><section class="panel"><div class="panel-heading"><h2>分析记录</h2></div><div class="panel-content"><dl class="definition"><dt>分析版本</dt><dd>v${e.version}</dd><dt>模型</dt><dd>${esc(e.model)}</dd><dt>运行模式</dt><dd>${e.mode==='demo'?'演示数据（未调用模型）':e.mode==='local'?'本地模型':'外部 API'}</dd><dt>规则版本</dt><dd>${esc(e.rules.version)}</dd><dt>分析时间</dt><dd>${when(e.created_at)}</dd><dt>处理耗时</dt><dd>${e.duration_ms?e.duration_ms/1000+' 秒':'—'}</dd></dl><div class="form-actions">${sourceButton(e.document_id,'查看输入资料')}</div></div></section></div></div>`;
@@ -768,7 +768,7 @@ function docDeleteHtml(d, knowledge) {
 function docSelectHtml(d) {
   const disabled = d.demo
     ? 'disabled title="演示数据，不能进入真实分析"'
-    : d.quarantined_at ? 'disabled title="资料已隔离（待核实），不能进入分析"' : '';
+    : d.quarantined_at ? 'disabled title="资料已隔离，不能进入分析"' : '';
   return `<input type="checkbox" name="doc-select" value="${d.id}" aria-label="选择 ${esc(d.title)}" ${disabled}>`;
 }
 function quarantineTag(d) {
@@ -795,9 +795,9 @@ async function documents(knowledge){
     </tr>`;
   }).join('');
   return heading(knowledge?'知识库':'资料与分析',knowledge?'保存政策、案例与业务资料，为风险分析提供可追溯的参考依据。':'上传或录入待研判资料，一键结合企业背景与知识库法规完成风险分析。')+
-    `<div class="split"><section class="panel"><div class="panel-heading"><h2>${knowledge?'添加参考资料':'导入并分析资料'}</h2></div><div class="panel-content">${importForm(knowledge)}</div></section><section class="panel"><div class="panel-heading"><h2>${knowledge?'检索与使用说明':'导入与分析说明'}</h2></div><div class="panel-content form-note">${knowledge?'<p>资料入库后，由已配置的模型自动生成中文摘要和中文关键词，外文法规也可以用中文检索。检索在服务端完成，结果都能追溯原文。</p><p>风险分析使用当前公司及公共知识库中相关的参考资料，引用的是原文片段，并随分析版本保存。</p>':'<ul><li>上传或录入后自动进入后台风险分析，并实时刷新进度。</li><li>分析时自动挂载贵司档案背景与知识库中最相关的印尼法规原文。</li><li>每条记录至少包含标题和正文；单条最多60000字符。</li><li>下方列表可直接查看分段分析进度、失败原因、取消排队或重新分析。</li></ul>'}<p>模型状态：<strong>${modelStatusText()}</strong><br>分类规则：${state.config.rules.confirmed?'已确认':'待甲方确认'}</p><a href="#settings">查看模型与规则设置</a></div></section></div>`+
+    `<div class="split"><section class="panel"><div class="panel-heading"><h2>${knowledge?'添加参考资料':'导入并分析资料'}</h2></div><div class="panel-content">${importForm(knowledge)}</div></section><section class="panel"><div class="panel-heading"><h2>${knowledge?'检索与使用说明':'导入与分析说明'}</h2></div><div class="panel-content form-note">${knowledge?'<p>资料入库后，由已配置的模型自动生成中文摘要和中文关键词，外文法规也可以用中文检索。检索在服务端完成，结果都能追溯原文。</p><p>风险分析使用当前公司及公共知识库中相关的参考资料，引用的是原文片段，并随分析版本保存。</p>':'<ul><li>上传或录入后自动进入后台风险分析，并实时刷新进度。</li><li>分析时自动挂载贵司档案背景与知识库中最相关的印尼法规原文。</li><li>每条记录至少包含标题和正文；单条最多60000字符。</li><li>下方列表可直接查看分段分析进度、失败原因、取消排队或重新分析。</li></ul>'}<p>模型状态：<strong>${modelStatusText()}</strong><br>分类规则：${state.config.rules.confirmed?'已确认':'待确认'}</p><a href="#settings">查看模型与规则设置</a></div></section></div>`+
     (knowledge?'<section class="panel knowledge-search-panel"><div class="panel-heading"><h2>知识库检索</h2><small>中文、印尼文和英文关键词均可</small></div><form id="knowledge-search" class="knowledge-search-bar"><label class="field">内容检索<input name="q" value="'+esc(state.kq||'')+'" required placeholder="检索资料标题、摘要和正文"></label><button class="primary small" type="submit">检索内容</button></form><section id="knowledge-results" class="kr" aria-live="polite"></section></section>':'')+
-    `<section class="panel"><div class="panel-heading"><h2>${knowledge?'参考资料':'资料与分析任务列表'} <small>${data.total} 条</small></h2>${knowledge?'':'<div class="actions"><button class="secondary small" data-refresh>刷新进度</button><button class="primary small" id="analyze-selected">分析所选资料</button></div>'}</div><form class="filters" id="document-filter"><label class="search-field">搜索资料<input name="q" value="${esc(state.filter.q||'')}" placeholder="按标题搜索"></label><button class="secondary small">查询</button></form><p id="list-stale" hidden>列表有新增或删除，<button type="button" class="text-button" data-refresh>点击刷新</button></p>${data.items.length?`<div class="table-wrap"><table><thead><tr>${knowledge?'':'<th><input type="checkbox" id="select-all" aria-label="选择当前页可分析资料"></th>'}<th>资料标题</th><th>日期（来源）</th><th>${knowledge?'中文摘要':'分析进度与结论'}</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>`:empty(knowledge?'知识库还没有资料':'暂无待分析资料',knowledge?'导入甲方提供的政策法规或案例后，可以先检索检查内容。':'在上方上传文件或手动录入，保存后自动启动风险分析。')}${pagination(data)}</section>`;
+    `<section class="panel"><div class="panel-heading"><h2>${knowledge?'参考资料':'资料与分析任务列表'} <small>${data.total} 条</small></h2>${knowledge?'':'<div class="actions"><button class="secondary small" data-refresh>刷新进度</button><button class="primary small" id="analyze-selected">分析所选资料</button></div>'}</div><form class="filters" id="document-filter"><label class="search-field">搜索资料<input name="q" value="${esc(state.filter.q||'')}" placeholder="按标题搜索"></label><button class="secondary small">查询</button></form><p id="list-stale" hidden>列表有新增或删除，<button type="button" class="text-button" data-refresh>点击刷新</button></p>${data.items.length?`<div class="table-wrap"><table><thead><tr>${knowledge?'':'<th><input type="checkbox" id="select-all" aria-label="选择当前页可分析资料"></th>'}<th>资料标题</th><th>日期（来源）</th><th>${knowledge?'中文摘要':'分析进度与结论'}</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>`:empty(knowledge?'知识库还没有资料':'暂无待分析资料',knowledge?'导入政策法规或业务资料后，即可检索原文。':'在上方上传文件或手动录入，保存后自动启动风险分析。')}${pagination(data)}</section>`;
 }
 function docJobActionsHtml(d){
   if(d.demo||d.quarantined_at)return '';
@@ -820,7 +820,7 @@ function sourceDateRows(d) {
     rows.push(['存档快照', esc(d.archived_at)]);
   }
   if (d.fetched_at) {
-    rows.push(['抓取时间', esc(when(d.fetched_at))]);
+    rows.push(['收录时间', esc(when(d.fetched_at))]);
   }
   if (d.date_source === 'removed' && d.date_legacy) {
     rows.push(['已移除的旧日期', `${esc(d.date_legacy)}（无法证明是发布日期，仅保留核对）`]);
@@ -852,7 +852,7 @@ async function showSource(id, quote = '') {
     const kwHtml = d.zh_keywords ? d.zh_keywords.split(/[、,，;；]+/).filter(Boolean).map((k) => `<span class="kw-chip">${esc(k.trim())}</span>`).join('') : '';
     const zhBlock = (d.zh_summary || d.zh_keywords) ? `<section class="detail-zh-card"><h3>中文摘要与检索关键词 <small>AI 生成，仅作检索辅助</small></h3>${d.zh_summary ? `<p class="detail-zh-summary">${esc(d.zh_summary)}</p>` : ''}${kwHtml ? `<div class="detail-zh-keywords">${kwHtml}</div>` : ''}</section>` : '';
     const metaGrid = `<dl class="detail-meta-grid"><div><dt>资料编号</dt><dd>#${d.id}（${d.kind === 'knowledge' ? '知识库法规/参考资料' : d.kind === 'supplement' ? '关联补充材料' : '待分析业务资料'}${d.kind_label ? ` · ${esc(d.kind_label)}` : ''}）</dd></div>${sourceDateRows(d)}<div><dt>信息来源</dt><dd>${esc(d.source || '未填写')}</dd></div><div><dt>正文规模</dt><dd>${(d.body?.length || 0).toLocaleString('zh-CN')} 字符 · 共 ${d.chunks?.length || 1} 个检索分段</dd></div></dl>`;
-    const quarantine = d.quarantined_at ? `<div class="notice-inline" role="note">资料已隔离（待核实），不计入统计、列表和简报，也不能进入分析。原因：${esc(d.quarantine_reason || '未填写')}</div>` : '';
+    const quarantine = d.quarantined_at ? `<div class="notice-inline" role="note">资料已隔离，不计入统计、列表和简报，也不能进入分析。原因：${esc(d.quarantine_reason || '未填写')}</div>` : '';
     const analyses = d.kind === 'event' || d.analyses?.length
       ? `<h3>分析记录</h3>${d.analyses.length ? d.analyses.map((a) => `<p class="form-note">v${a.version} · ${badge(a.decision)} · ${esc(a.model)} · ${when(a.created_at)} · 规则 ${esc(a.rule_version)}${a.result.rules_snapshot_origin==='upgrade'?'（升级时固定）':''}${a.result.supplement_document_ids?.length?` · 补证材料 ${a.result.supplement_document_ids.map(id=>'#'+id).join('、')}`:''}${a.decision==='insufficient'?` · <a href="#evidence/${a.id}" data-history>进入补证</a>`:''}<br>${esc(a.result.reason || a.result.parts?.map((p) => p.reason).join('；') || '查看风险列表中的分析结果。')}</p>`).join('') : '<p class="muted">尚无分析记录。</p>'}`
       : '';

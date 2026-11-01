@@ -157,7 +157,7 @@ def create_app(settings=None, run_worker=True):
 
     @app.get('/api/release')
     def release():
-        return JSONResponse({'version':'20261101-direct-analysis'},headers={'Cache-Control':'no-store'})
+        return JSONResponse({'version':'20261101-business-copy'},headers={'Cache-Control':'no-store'})
 
     @app.get('/api/health')
     def health(): return {'status':'ok'}
@@ -437,7 +437,7 @@ def create_app(settings=None, run_worker=True):
                 doc=db.execute('SELECT * FROM documents WHERE id=?',(doc_id,)).fetchone()
                 if not doc or doc['kind']!='event' or (cid is not None and doc['company_id']!=cid):
                     raise ValueError(f'资料 {doc_id} 不是当前公司的待分析资料。')
-                if doc['demo']: raise ValueError('内置演示资料不进入真实分析，请导入新的测试资料。')
+                if doc['demo']: raise ValueError('演示资料不能用于风险分析，请导入业务资料。')
                 if doc['quarantined_at']: raise ValueError(f'资料 {doc_id} 已隔离，不能进入分析。')
                 checked[doc_id]=doc
             result=[]

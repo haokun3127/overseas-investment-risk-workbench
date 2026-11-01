@@ -1,5 +1,5 @@
 'use strict';
-const changeNames={added:'新增快照',changed:'正文更新',unchanged:'未变化',incomparable:'采集方式变化'};
+const changeNames={added:'首次收录',changed:'正文更新',unchanged:'未变化',incomparable:'采集方式变化'};
 
 async function evidencePage(id){
   if(id)return evidenceDetail(await api('/evidence/'+id));
@@ -36,14 +36,14 @@ function bindEvidence(){
 
 function changeControls(items){
   const counts=Object.fromEntries(Object.keys(changeNames).map(s=>[s,items.filter(p=>p.change?.status===s).length]));
-  return `<div class="web-change-controls"><label for="web-change-filter">正文变化<select id="web-change-filter"><option value="">全部 ${items.length} 页</option>${Object.entries(changeNames).map(([s,label])=>`<option value="${s}">${label} ${counts[s]} 页</option>`).join('')}</select></label><p>与同一网站来源、同一网址的上次成功采集比较。“新增快照”不代表今天发布。</p></div><p id="web-change-empty" class="notice-inline" hidden>当前筛选下没有页面，可切换正文变化条件。</p>`;
+  return `<div class="web-change-controls"><label for="web-change-filter">正文变化<select id="web-change-filter"><option value="">全部 ${items.length} 页</option>${Object.entries(changeNames).map(([s,label])=>`<option value="${s}">${label} ${counts[s]} 页</option>`).join('')}</select></label></div><p id="web-change-empty" class="notice-inline" hidden>当前筛选下没有页面，可切换正文变化条件。</p>`;
 }
 
 function comparisonHtml(c){
   const stamp=p=>`${when(p.fetched_at)}${p.archived_at?' · 存档 '+esc(p.archived_at):''}`;
   return `<div class="comparison-head"><h4>${changeNames[c.status]}</h4><p>本次快照：${stamp(c.current)}</p>${c.previous?`<p>对比快照：${stamp(c.previous)} · 任务 #${c.previous_run_id}</p>`:''}</div>`+
-    (c.status==='added'?'<p>该网址在此来源下尚无更早的成功快照，暂时无法比较。</p>':c.status==='unchanged'?'<p>正文未变化（忽略空白格式差异）。</p>':c.status==='incomparable'?'<p>两次采集分别使用在线页面和历史存档，时间口径不同，请分别核验原文。此状态不视为网站发生新更新。</p>':`<p class="diff-totals">新增 ${c.added_characters.toLocaleString('zh-CN')} 字符 · 删除 ${c.removed_characters.toLocaleString('zh-CN')} 字符</p><div class="diff-hunks">${c.hunks.map(rows=>`<div class="diff-hunk">${rows.map(r=>`<div class="diff-row ${r.kind}"><span>${{added:'新增',removed:'删除',context:'上下文'}[r.kind]}</span><p>${esc(r.text)}</p></div>`).join('')}</div>`).join('')}</div>${c.truncated?'<p class="notice-inline">差异较多，当前展示部分片段，请打开两份完整原文继续核验。</p>':''}`)+
-    `<div class="actions"><button class="secondary small" data-compare-original="${c.current.id}">本次完整原文</button>${c.previous?`<button class="secondary small" data-compare-original="${c.previous.id}">上次完整原文</button>`:''}</div><p class="form-note">这里只比较采集正文，不自动判定政策生效、失效或风险等级。</p>`;
+    (c.status==='added'?'<p>该网址在此来源下尚无更早的成功快照，暂时无法比较。</p>':c.status==='unchanged'?'<p>正文未变化（忽略空白格式差异）。</p>':c.status==='incomparable'?'<p>历史存档与在线版本，无法直接比较。</p>':`<p class="diff-totals">新增 ${c.added_characters.toLocaleString('zh-CN')} 字符 · 删除 ${c.removed_characters.toLocaleString('zh-CN')} 字符</p><div class="diff-hunks">${c.hunks.map(rows=>`<div class="diff-hunk">${rows.map(r=>`<div class="diff-row ${r.kind}"><span>${{added:'新增',removed:'删除',context:'上下文'}[r.kind]}</span><p>${esc(r.text)}</p></div>`).join('')}</div>`).join('')}</div>${c.truncated?'<p class="notice-inline">差异较多，当前展示部分片段，请打开两份完整原文继续核验。</p>':''}`)+
+    `<div class="actions"><button class="secondary small" data-compare-original="${c.current.id}">本次完整原文</button>${c.previous?`<button class="secondary small" data-compare-original="${c.previous.id}">上次完整原文</button>`:''}</div>`;
 }
 
 function bindWebChanges(target){

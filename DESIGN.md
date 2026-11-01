@@ -172,3 +172,9 @@ Taste审查后的定向优化：演示内容只保留小型“示例”标记与
 风险资料的文件上传和手动录入统一使用“导入并分析资料”，保存成功后自动提交后台分析队列，无需勾选授权或自动分析；知识库使用“导入知识库”，进入检索和中文摘要处理范围。保留现有保存中、排队、失败原因与分析历史反馈，模型或规则尚未就绪时明确说明未启动原因。旧授权字段不再决定能否使用资料，取消授权不会自动重跑或覆盖既有模型结果。企业/登录边界、隔离、演示限制、模型配置与规则检查仍生效；网站启停、调度及其自动入库/分析设置仍是独立操作流程。
 
 功能说明见 [DIRECT-ANALYSIS.md](C:/Users/10397/Desktop/弹子石智能体_交付包/tmp/rag-customer-parity-20261101/docs/DIRECT-ANALYSIS.md)，范围说明见 [.impeccable/surfaces/web-direct-analysis.md](C:/Users/10397/Desktop/弹子石智能体_交付包/tmp/rag-customer-parity-20261101/.impeccable/surfaces/web-direct-analysis.md)。界面复核结论为 `ship`，未发现本范围内的实质界面问题，详见 [DIRECT-ANALYSIS-UI-REVIEW.md](C:/Users/10397/Desktop/弹子石智能体_交付包/tmp/rag-customer-parity-20261101/docs/DIRECT-ANALYSIS-UI-REVIEW.md)。文件与文字入队由关闭工作线程的隔离样例验证，不代表真实模型已完成分析；本附记不刷新全局 token、历史记录或其他产品断言。
+
+## 2026-11-01 业务文案精简
+
+沿用现有 Operate / Read 工作台，移除通用录入、交付测试说明、重复脚注和辅助眉题；共享标题默认不显示眉题（`showEyebrow=false`）。仅清理合成或初始化的默认元信息，保留业务原文、风险与模型分析、来源和时间、人工备注及具体不确定性；空判定依据不补通用说明。相关性为 `null` 时显示“未筛选”，网站更新的 `pending` / `reviewed` 显示“待处理” / “已处理”，底层状态与操作不变。
+
+范围及数据边界见 [BUSINESS-COPY.md](docs/BUSINESS-COPY.md)。[BUSINESS-COPY-UI-REVIEW.md](docs/BUSINESS-COPY-UI-REVIEW.md) 结论为 `ship`，无本范围内的实质界面问题；证据目录 `../rag-original-rules-audit-20261101/ui-business-copy-round2` 包含12页桌面与手机共24个视口，关键截图为 `website-result-desktop.png`、`event-mobile.png`、`updates-mobile.png` 和 `countermeasures-desktop.png`。本附记不更改 PRODUCT.md、设计 sidecar、既有资料直接分析或分级对策的范围映射，也不刷新历史规范或全局视觉系统。
