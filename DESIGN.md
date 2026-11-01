@@ -156,3 +156,11 @@ Taste审查后的定向优化：演示内容只保留小型“示例”标记与
 ## 2026-10-24 顶部导航调整
 
 顶部栏改为内容区域内贴顶的实底导航，取消外围间距、圆角、模糊和投影；滚动前后保持同一表面。桌面高度56px，手机52px，手机菜单抽屉紧接导航下边缘。原文定位和复核侧栏共用“导航高度 + 16px”的滚动留白，替代116px固定空隙。
+
+## 2026-11-01 分级对策参考扩展
+
+本次为现有工作台中的 Read / Operate 扩展，保留玄墨导航、纸白阅读表面、潮汐青链接和既有风险徽章。新增样式直接引用现行 `--paper`、`--paper-50`、`--line`、`--text-2`、`--tide-600/700`，继承中文界面字体；本节只记录该扩展，不刷新前文历史或全局 token。实现见 [countermeasures.js](C:/Users/10397/Desktop/弹子石智能体_交付包/tmp/rag-customer-parity-20261101/web/countermeasures.js)、[countermeasures.css](C:/Users/10397/Desktop/弹子石智能体_交付包/tmp/rag-customer-parity-20261101/web/countermeasures.css)，现行底层 token 见 [tokens.css](C:/Users/10397/Desktop/弹子石智能体_交付包/tmp/rag-customer-parity-20261101/web/tokens.css)。
+
+分级对策库依次提供五级选择、所选等级的预警标准与原文阈值、企业和国家两类对策、逐项表格定位及来源下载。桌面角色列表为两列（1.2:1），间隔32px；700px及以下变为单列，等级导航变为两列并让第五项占满一行。标准正文15px、对策正文桌面14px/手机15px、定位与数量12px、说明13px；等级控件最小高度桌面46px/手机48px，手机原文下载入口至少44px。所选等级以边界和文字共同表达，原生链接保留 `aria-current` 与可见键盘焦点。
+
+原文对策保持可选参考语气，企业适用性和国家层面有权机构说明随角色标题展示；原文阈值明确区别于事件得分。事件详情和就地核验区将原文参考与模型建议分列，简报附录按涉及等级各汇总一次，并保留角色、定位及最终来源。缺失原文或旧等级提供说明，不自动换算、采取措施、重跑模型或改写事件。功能边界见 [GRADE-COUNTERMEASURES.md](C:/Users/10397/Desktop/弹子石智能体_交付包/tmp/rag-customer-parity-20261101/docs/GRADE-COUNTERMEASURES.md)；本次界面复核结论为 `ship`，详见 [COUNTERMEASURE-UI-REVIEW.md](C:/Users/10397/Desktop/弹子石智能体_交付包/tmp/rag-customer-parity-20261101/docs/COUNTERMEASURE-UI-REVIEW.md)。

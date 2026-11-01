@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from .access import company_of, is_admin, require_admin, session_company
 from .config import ROOT, Settings
-from . import companies, model
+from . import companies, model, countermeasures
 from .demo import seed
 from .enrich import Enricher
 from .ingest import insert_document, parse_file
@@ -160,7 +160,7 @@ def create_app(settings=None, run_worker=True):
 
     @app.get('/api/release')
     def release():
-        return JSONResponse({'version':'20261024-header1'},headers={'Cache-Control':'no-store'})
+        return JSONResponse({'version':'20261101-countermeasures'},headers={'Cache-Control':'no-store'})
 
     @app.get('/api/health')
     def health(): return {'status':'ok'}
@@ -587,6 +587,17 @@ def create_app(settings=None, run_worker=True):
         rows=store.rows('SELECT e.id,e.title,e.category,e.level,e.summary,e.review_status,d.date,d.date_source,d.source,d.demo,d.id document_id,a.model,a.mode'+base+' ORDER BY d.date DESC,e.id DESC LIMIT 20 OFFSET ?',args+[(max(page,1)-1)*20])
         return {'items':rows,'total':total,'page':max(page,1),'page_size':20}
 
+    @app.get('/api/countermeasures')
+    def countermeasure_library(request:Request):
+        return countermeasures.load_library(store.directory)
+
+    @app.get('/api/countermeasures/source')
+    def countermeasure_source(request:Request):
+        path=countermeasures.source_file(store.directory)
+        if path is None:
+            raise HTTPException(503,countermeasures.UNAVAILABLE)
+        return FileResponse(path,media_type='application/msword',filename=countermeasures.SOURCE_FILENAME)
+
     @app.get('/api/events/{event_id}')
     def event(event_id:int,request:Request):
         cid=getattr(request.state,'company_id',None)
@@ -597,6 +608,7 @@ def create_app(settings=None, run_worker=True):
         for name in ('evidence','rules','usage','result'): row[name]=json.loads(row.pop(name+'_json'))
         row['is_latest']=store.one('SELECT id FROM analyses WHERE document_id=? ORDER BY version DESC LIMIT 1',(row['document_id'],))['id']==row['analysis_id']
         row['review_history']=store.rows('SELECT status,note,created_at FROM review_history WHERE event_id=? ORDER BY id DESC',(event_id,))
+        row['countermeasures']=countermeasures.for_level(countermeasures.load_library(store.directory),row['level'])
         return row
 
     @app.put('/api/events/{event_id}/review')
@@ -716,7 +728,8 @@ def create_app(settings=None, run_worker=True):
             item['evidence']=json.loads(item.pop('evidence_json'))
             item['rule_version']=json.loads(item.pop('rules_json'))['version']
         company=companies.current(store,cid) if cid is not None else None
-        return {'generated_at':now(),'total':total,'items':items,'scope':{
+        reference=countermeasures.report_reference(countermeasures.load_library(store.directory),[item['level'] for item in items])
+        return {'generated_at':now(),'total':total,'items':items,'countermeasures':reference,'scope':{
             'q':q,'level':level,'category':category,'review':review,'demo':demo,'date_from':date_from,'date_to':date_to,
             'company':{'all':cid is None,'name':company['name'] if company else '','count':store.one('SELECT COUNT(*) n FROM companies')['n'] if cid is None else 1},
         }}

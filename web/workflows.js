@@ -22,6 +22,7 @@ async function jobsPage(){
 }
 
 async function reportView(){
+  state.reportCountermeasures=null;
   const reportScope=scopeValue()==='demo'?'demo':'real';  // the brief goes to the client: no demo records by default
   const backLink=`<a class="secondary" href="${esc(eventHref(state.filter))}">返回风险列表</a>`;
   let data;
@@ -36,6 +37,7 @@ async function reportView(){
       + `<section class="panel report-error"><div class="panel-content">${errorBox(error.message)}<p class="form-note">请缩小日期、复核结论或返回风险列表收窄等级、类型和关键词后再生成；完整台账可在风险事件页导出 CSV。</p><a class="secondary small" href="${esc(eventHref(state.filter))}">返回风险列表调整筛选</a></div></section>`;
   }
   const companyScope=data.scope?.company||{};
+  state.reportCountermeasures=data.countermeasures;
   const companyText=companyScope.all?`全部公司（${companyScope.count??0} 家）`:(companyScope.name||'本公司');
   const showCompany=Boolean(companyScope.all);
   const counts=Object.fromEntries(levelOrder.map(l=>[l,data.items.filter(i=>i.level===l).length]));

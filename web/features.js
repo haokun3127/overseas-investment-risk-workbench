@@ -206,9 +206,17 @@ async function enhanceView(route,html){
   }
   if(route==='event'){
     const e=state.currentEvent;
+    const summary=host.querySelector('.detail-grid>div:first-child>.panel');
+    const modelHeading=summary?.querySelector('.detail-section:last-child h2');
+    if(modelHeading)modelHeading.textContent='模型针对本事件的建议';
+    summary?.insertAdjacentHTML('beforeend',countermeasureEventHtml(e.countermeasures));
     const form=host.querySelector('#review-form');
     form.insertAdjacentHTML('beforeend',`<details class="review-history"><summary>复核历史 · ${e.review_history.length} 条</summary>${e.review_history.length?e.review_history.map(h=>`<article><div>${badge(h.status)} <small>${when(h.created_at)}</small></div><p>${esc(h.note||'未填写意见')}</p></article>`).join(''):'<p class="form-note">保存复核后会在此保留每次结论与意见。</p>'}</details>`);
     host.querySelector('.back-link').href=state.lastEvents||eventHref();
+  }
+  if(route==='report'){
+    host.querySelectorAll('.brief-action h3').forEach(h=>{h.textContent='模型针对本事件的建议';});
+    host.querySelector('.brief-end')?.insertAdjacentHTML('beforebegin',countermeasureReportHtml(state.reportCountermeasures));
   }
   if(route==='documents'||route==='knowledge'){
     if(route==='documents')host.querySelector('.page-heading .actions').insertAdjacentHTML('afterbegin','<a class="secondary" href="#evidence">待补证</a>');

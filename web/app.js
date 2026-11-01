@@ -93,7 +93,7 @@ function categoryOptions(counts = {}) {
   const legacy = !family && extra.length ? `<optgroup label="此前分类">${extra.map(option).join('')}</optgroup>` : '';
   return `<option value="">全部类型</option>${groups}${legacy}`;
 }
-const names = {overview:'风险总览',events:'风险事件',documents:'资料与分析',evidence:'待补证',updates:'网站更新待办',websites:'网站检索',knowledge:'知识库',jobs:'资料与分析',settings:'模型与规则',report:'风险简报'};
+const names = {overview:'风险总览',events:'风险事件',documents:'资料与分析',evidence:'待补证',updates:'网站更新待办',websites:'网站检索',knowledge:'知识库',jobs:'资料与分析',settings:'模型与规则',report:'风险简报',countermeasures:'分级对策库'};
 const levels = {
   lv1: 'I级 红色预警',
   lv2: 'II级 黄色预警',
@@ -157,9 +157,9 @@ function errorBox(message){return `<div class="error" role="alert">${esc(message
 function icon(name){return `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;}
 const eyebrows={风险事件:'RISK LEDGER · 逐条核验',资料与分析:'INTAKE · 资料研判',知识库:'ARCHIVE · 法规与案例',网站检索:'WATCH · 公开来源采集',风险简报:'BRIEFING · 对外简报',模型与规则:'CONFIG · 模型与规则',分析任务:'QUEUE · 后台任务'};
 function stamp(){return new Date().toLocaleString('zh-CN',{hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});}
-function heading(title,subtitle,actions=''){
+function heading(title,subtitle,actions='',showEyebrow=true){
   const eyebrow=title==='风险总览'?`INDONESIA · 海外投资风险研判 · 页面刷新 ${stamp()}`:(eyebrows[title]||'WORKBENCH');
-  return `<div class="page-heading"><div><div class="page-eyebrow"><span class="label-dot" aria-hidden="true"></span>${eyebrow}</div><h1>${title}</h1><p>${subtitle}</p></div><div class="actions">${actions}</div></div>`;
+  return `<div class="page-heading"><div>${showEyebrow?`<div class="page-eyebrow"><span class="label-dot" aria-hidden="true"></span>${eyebrow}</div>`:''}<h1>${title}</h1><p>${subtitle}</p></div><div class="actions">${actions}</div></div>`;
 }
 function scopeValue(){return ['all','real','demo'].includes(state.scope)?state.scope:'all';}
 function eventHref(filter={}){return '#events?'+new URLSearchParams({...filter,demo:scopeValue()});}
@@ -619,6 +619,7 @@ async function render(options={}){
     else if(route==='updates')html=await updatesPage();
     else if(route==='settings')html=await settings();
     else if(route==='report')html=await reportView();
+    else if(route==='countermeasures')html=await countermeasurePage(new URLSearchParams(routeSearch).get('level'));
     else html=empty('页面不存在','请从左侧导航选择工作区。','<a href="#overview" class="primary">返回总览</a>');
     if(renderId!==state.renderId)return;
     html=await enhanceView(route,html);
