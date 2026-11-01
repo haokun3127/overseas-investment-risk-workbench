@@ -84,10 +84,10 @@ class Worker:
                             'sent_chunk_ids': [chunk['id'] for chunk in chunks]}
             else:
                 results, events, usage, knowledge, coverage = grouped
-            # Only exact duplicate titles/quotes are collapsed; all remaining events stay reviewable.
+            # Shared titles/evidence can support distinct indicators; never erase those events.
             unique = {}
             for event in events:
-                key = (event['title'], event['evidence'][0]['quote'])
+                key = (event['category'], event['title'], event['evidence'][0]['quote'])
                 unique.setdefault(key,event)
             events = list(unique.values())
             decision = 'risk' if events else ('insufficient' if any(r['decision']=='insufficient' for r in results) else 'non_risk')
@@ -138,8 +138,10 @@ class Worker:
     def _narrow_rules(self, rules, chosen):
         gloss = {category: f'{family} / {group}：{category}（{note}）' for family, group, category, note in INDICATORS}
         narrowed = dict(rules)
-        narrowed['categories'] = [name for name in chosen if name in rules['categories']]
-        focus = '本次按向量预选的重点三级指标：\n' + '\n'.join(gloss[name] for name in narrowed['categories'] if name in gloss)
+        # Semantic ranking is an attention hint, never authority to remove valid indicators.
+        narrowed['categories'] = list(rules['categories'])
+        narrowed['focus_categories'] = [name for name in chosen if name in rules['categories']]
+        focus = '向量预选只提示检索重点，不限制允许输出的三级指标；原文支持其他指标时仍须保留：\n' + '\n'.join(gloss[name] for name in narrowed['focus_categories'] if name in gloss)
         notes = (rules.get('notes') or '').rstrip()
         narrowed['notes'] = f'{notes}\n\n{focus}' if notes else focus
         return narrowed
@@ -150,10 +152,10 @@ class Worker:
         if not plan:
             return None
         narrowed = self._narrow_rules(rules, plan['categories'])
-        if len(narrowed['categories']) < 3:
+        if len(narrowed['focus_categories']) < 3:
             return None
         sources = plan['sources']
-        query = ' '.join(narrowed['categories'][:4] + [context.get('industry') or '', context.get('location') or ''])
+        query = ' '.join(narrowed['focus_categories'][:4] + [context.get('industry') or '', context.get('location') or ''])
         hits = retrieve(self.store, query, external=external, company_id=job_company_id, per_document=True, limit=4)
         # References carry the original chunk text, which is what quotes are validated against.
         references, knowledge = self._references(doc, sources, supplements, hits)
@@ -168,8 +170,9 @@ class Worker:
                     'sent_chunk_ids': [chunk['id'] for chunk in sources],
                     'sent_locators': [chunk['locator'] for chunk in sources],
                     'max_source_chunks': MAX_SOURCE_CHUNKS,
-                    'categories': narrowed['categories'],
-                    'category_chunks': {name: plan['category_chunks'][name] for name in narrowed['categories']},
+                    'categories': narrowed['focus_categories'],
+                    'allowed_category_count': len(narrowed['categories']),
+                    'category_chunks': {name: plan['category_chunks'][name] for name in narrowed['focus_categories']},
                     'top_similarity': plan['top_similarity'], 'similarity_floor': plan['floor'],
                     'embedding_model': plan['model']}
         return payload, references, knowledge, coverage
@@ -187,8 +190,7 @@ class Worker:
         payload, references, knowledge, coverage = prepared
         with self.store.db() as db:
             db.execute('UPDATE jobs SET total=1,progress=0 WHERE id=?', (job['id'],))
-        raw, used = await model.call_model(self.settings, payload)
-        result = model.validate_result(raw, references, payload['rules'])
+        result, used = await model.call_validated(self.settings, payload, references, payload['rules'])
         with self.store.db() as db:
             db.execute('UPDATE jobs SET progress=1 WHERE id=?', (job['id'],))
         return [result], list(result['events']), [used], knowledge, coverage
@@ -205,8 +207,7 @@ class Worker:
                 'document': {'title': doc['title'], 'date': doc['date'], 'source': doc['source']},
                 'company': context,
                 'part': f'{index + 1}/{len(chunks)}', 'references': [{'reference': key, **value} for key, value in references.items()]}
-            raw, used = await model.call_model(self.settings, payload)
-            result = model.validate_result(raw, references, rules)
+            result, used = await model.call_validated(self.settings, payload, references, rules)
             results.append(result)
             usage.append(used)
             events.extend(result['events'])
