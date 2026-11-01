@@ -28,6 +28,11 @@ def add_source(c,**extra):
     assert r.status_code==200,r.text
     return r.json()['id']
 
+def make_company(c,name='网站入库归属公司'):
+    r=c.post('/api/companies',json={'name':name,'allow_external':True})
+    assert r.status_code==200,r.text
+    return r.json()['id']
+
 def fake_fetch(url,base,robots=None,relaxed=False,**kw):
     if url.endswith('robots.txt'):
         return url,'User-agent: *\nDisallow: /private/\n',b'','text/plain'
@@ -57,9 +62,10 @@ def test_retrieval_preview_dedup_import_and_risk_queue(web_client,monkeypatch):
     unrelated=next(p for p in run['items'] if not p['relevant'])
     original=c.get('/api/web/pages/'+str(relevant['id'])).json()
     assert relevant['quote'] in original['body'] and original['url'].startswith('https://source.example/news/')
-    assert c.post('/api/web/import',json={'page_ids':[relevant['id'],unrelated['id']],'kind':'both'}).status_code==400
+    owner=make_company(c)
+    assert c.post('/api/web/import',json={'page_ids':[relevant['id'],unrelated['id']],'kind':'both','company_id':owner}).status_code==400
     assert not c.get('/api/documents').json()['items']
-    result=c.post('/api/web/import',json={'page_ids':[relevant['id']],'kind':'both','analyze':True}).json()
+    result=c.post('/api/web/import',json={'page_ids':[relevant['id']],'kind':'both','analyze':True,'company_id':owner}).json()
     assert len(result['items'])==2 and all(i['created'] for i in result['items'])
     assert next(i for i in result['items'] if i['kind']=='event')['job_id']
     assert c.get('/api/knowledge/search?q=港口原料').json()['items']
@@ -67,7 +73,7 @@ def test_retrieval_preview_dedup_import_and_risk_queue(web_client,monkeypatch):
     assert doc['url']==original['url'] and doc['demo']==0
     snapshot=c.get('/api/documents/'+str(doc['id'])+'/file')
     assert snapshot.status_code==200 and 'attachment' in snapshot.headers['content-disposition']
-    second=c.post('/api/web/import',json={'page_ids':[relevant['id']],'kind':'both','analyze':True}).json()
+    second=c.post('/api/web/import',json={'page_ids':[relevant['id']],'kind':'both','analyze':True,'company_id':owner}).json()
     assert not any(i['created'] for i in second['items'])
     assert c.get('/api/jobs').json()['total']==1
 
@@ -76,7 +82,7 @@ def test_search_failure_does_not_auto_import(web_client,monkeypatch):
     async def wrong(settings,payload,system=None):
         return {'items':[{'id':p['id'],'relevant':True,'reason':'假引用','quote':'这是不存在于任何页面的伪造原文'} for p in payload['pages']]},{}
     monkeypatch.setattr(websearch.model,'call_model',wrong)
-    run=process(web_client,add_source(web_client,auto_import='both',auto_analyze=True))
+    run=process(web_client,add_source(web_client,auto_import='both',auto_analyze=True,target_company_id=make_company(web_client)))
     # Fabricated quotes are never accepted: pages stay unjudged, the run still completes, nothing is imported.
     assert run['status']=='completed' and 'AI 未给出可核验的判定' in run['error']
     assert run['items'] and all(p['relevant'] is None and p['reason']==websearch.UNJUDGED for p in run['items'])
@@ -123,7 +129,7 @@ def test_authorization_cancel_edit_pause(web_client):
 
 def test_automatic_ingest_keeps_knowledge_and_analysis_separate(web_client,monkeypatch):
     monkeypatch.setattr(websearch,'fetch_page',fake_fetch);monkeypatch.setattr(websearch.model,'call_model',fake_model)
-    run=process(web_client,add_source(web_client,auto_import='both',auto_analyze=True))
+    run=process(web_client,add_source(web_client,auto_import='both',auto_analyze=True,target_company_id=make_company(web_client)))
     assert run['status']=='completed'
     assert web_client.get('/api/documents?kind=knowledge').json()['total']==1
     assert web_client.get('/api/documents?kind=event').json()['total']==1
@@ -624,3 +630,61 @@ def test_page_dates_are_normalised_for_import():
     assert websearch.normal_date('Thu, 06 Mar 1980 00:00:00 +0000')=='1980-03-06'
     assert websearch.normal_date('2026-08-03T00:00:00Z')=='2026-08-03'
     assert websearch.normal_date('2026-02-30')=='' and websearch.normal_date('kemarin')=='' and websearch.normal_date(None)==''
+
+
+def test_work_queues_use_latest_run_and_health(web_client):
+    c=web_client
+    a=add_source(c,name='待运行',category='十二、经贸投资')
+    b=add_source(c,name='已恢复',category='二、司法')
+    d=add_source(c,name='当前失败',category='十一、反馈')
+    store=c.app.state.store
+    for sid,status,at in [(b,'failed','2026-10-01T00:00:00+00:00'),(b,'completed','2026-10-02T00:00:00+00:00'),(d,'failed','2026-10-03T00:00:00+00:00')]:
+        source=store.one('SELECT * FROM web_sources WHERE id=?',(sid,))
+        rid=websearch.queue_run(store,source)
+        with store.db() as db:db.execute('UPDATE web_runs SET status=?,finished_at=? WHERE id=?',(status,at,rid))
+    data=c.get('/api/web/health').json()
+    assert data['enabled']==3 and data['scheduled']==0 and data['manual']==3
+    assert data['latest_failed']==1 and data['unrun']==1
+    assert data['last_success']=='2026-10-02T00:00:00+00:00'
+    assert [x['id'] for x in c.get('/api/web/sources?status=failed').json()['items']]==[d]
+    assert [x['id'] for x in c.get('/api/web/sources?status=unrun').json()['items']]==[a]
+    assert [x['id'] for x in c.get('/api/web/sources?status=completed').json()['items']]==[b]
+    assert [x['name'] for x in c.get('/api/web/sources').json()['groups']]==['二、司法','十一、反馈','十二、经贸投资']
+    assert [x['id'] for x in c.get('/api/web/sources').json()['items']]==[b,d,a]
+    assert c.get('/api/web/sources?status=bad').status_code==400
+    assert c.post('/api/web/sources/'+str(d)+'/toggle',json={'enabled':False}).status_code==200
+    assert c.get('/api/web/health').json()['latest_failed']==0
+    assert c.get('/api/web/sources?status=failed').json()['total']==0
+
+
+def test_history_knowledge_is_separate_from_current_relevance(web_client,monkeypatch):
+    from app.ingest import insert_document
+    c=web_client
+    sid=add_source(c)
+    store=c.app.state.store
+    doc_id,_=insert_document(store,{'title':'历史页面','body':'港口设备故障导致原料供应延迟，需要评估库存。'},kind='knowledge')
+    rid=websearch.queue_run(store,store.one('SELECT * FROM web_sources WHERE id=?',(sid,)))
+    with store.db() as db:
+        db.execute("UPDATE documents SET created_at='2026-01-01T00:00:00+00:00' WHERE id=?",(doc_id,))
+        db.execute("UPDATE web_runs SET status='completed' WHERE id=?",(rid,))
+        db.execute("INSERT INTO web_pages(run_id,url,title,body,fetched_at,digest,snapshot,relevant) VALUES (?,?,?,?,?,?,?,0)",
+                   (rid,'https://source.example/news/','历史页面','港口设备故障导致原料供应延迟，需要评估库存。','2026-10-24T00:00:00+00:00','test','snapshot'))
+    p=c.get('/api/web/runs/'+str(rid)).json()['items'][0]
+    assert p['relevant']==0 and p['in_knowledge'] and p['knowledge_from_history']
+    assert p['knowledge_document_id']==doc_id and p['knowledge_saved_at']=='2026-01-01T00:00:00+00:00'
+    with store.db() as db:db.execute('UPDATE web_pages SET relevant=NULL WHERE run_id=?',(rid,))
+    assert c.get('/api/web/health').json()['undecided']==1
+    assert [x['id'] for x in c.get('/api/web/sources?status=undecided').json()['items']]==[sid]
+
+
+def test_release_is_public_but_collection_health_is_admin_only(web_client):
+    c=web_client
+    anon=TestClient(c.app)
+    r=anon.get('/api/release')
+    assert r.status_code==200 and r.headers['cache-control']=='no-store'
+    assert f'name="app-version" content="{r.json()["version"]}"' in c.get('/').text
+    assert anon.get('/').headers['cache-control']=='no-cache'
+    assert anon.get('/api/web/health').status_code==401
+    registered=c.post('/api/auth/register',json={'username':'health_company','password':'test-password-2026','name':'状态隔离测试公司','allow_external':False})
+    assert registered.status_code==200,registered.text
+    assert c.get('/api/web/health').status_code==403

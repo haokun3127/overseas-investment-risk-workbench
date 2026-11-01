@@ -12,3 +12,8 @@ dist/
 
 .claude/settings.local.json
 *访问凭据*.txt
+
+# Deployment/editor artifacts are not source code.
+._*
+*.bak
+*.bak-*

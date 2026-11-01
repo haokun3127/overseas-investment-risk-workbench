@@ -41,6 +41,21 @@ def test_chinese_summary_makes_foreign_documents_searchable_in_chinese(client,mo
     hits=retrieve(store,'工资补贴',limit=4)
     assert hits and all(h['document_id']==law and 'zh_summary' not in h for h in hits)  # analysis gets original text only
 
+def test_synonym_and_foreign_body_still_find_the_document(client):
+    store=client.app.state.store
+    stated=add(store,'Wage rule','English text without the wage term. '*20)
+    buried=add(store,'Permenaker wage chapter','Bab tentang pengupahan dan upah minimum pekerja. '*20)
+    with store.db() as db:
+        db.execute('UPDATE documents SET zh_summary=?,zh_keywords=? WHERE id=?',('规定劳动者工资支付标准。','工资',stated))
+        db.execute('UPDATE documents SET zh_summary=?,zh_keywords=? WHERE id=?',('印尼劳工部条例，调整补贴发放地区。','劳工部,补贴',buried))
+    assert any(hit['document_id']==stated for hit in retrieve(store,'薪酬'))
+    body_hits=retrieve(store,'工资')
+    assert any(hit['document_id']==buried for hit in body_hits)
+    assert any(hit['document_id']==stated for hit in body_hits)
+    stated_score=next(hit['score'] for hit in body_hits if hit['document_id']==stated)
+    buried_score=next(hit['score'] for hit in body_hits if hit['document_id']==buried)
+    assert stated_score >= buried_score
+
 def test_model_outage_leaves_documents_pending_and_bad_output_marks_failed(client,monkeypatch):
     store=client.app.state.store
     doc=add(store,'Treaty','ASEAN Treaty on Extradition. '*40)

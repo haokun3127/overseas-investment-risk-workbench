@@ -196,7 +196,7 @@ def test_job_preconditions(client):
     assert second['items'][0]['existing']
 
 def valid_result(text='这是用于测试的风险证据原文。'):
-    return {'decision':'risk','reason':'资料中存在经营中断信息','events':[{'title':'测试风险','category':'环境与安全','level':'red','summary':'测试摘要','impact':'测试影响推断','recommendation':'建议核实','evidence':[{'reference':'S1','quote':text,'reason':'支持中断判断'}]}]}
+    return {'decision':'risk','reason':'资料中存在经营中断信息','events':[{'title':'测试风险','category':'环境行政审查风险','level':'lv1','summary':'测试摘要','impact':'测试影响推断','recommendation':'建议核实','evidence':[{'reference':'S1','quote':text,'reason':'支持中断判断'}]}]}
 
 def test_citation_and_classification_validation():
     references={'S1':{'text':'这是用于测试的风险证据原文。','kind':'source','document_id':1,'locator':'正文','title':'测试资料'}}

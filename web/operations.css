@@ -1,0 +1,83 @@
+/* Task-focused refinement of the existing ink / paper / tide visual system. */
+#shell .app-body{--shell-clearance:calc(var(--shell-top) + 16px);}
+#shell #breadcrumb,#shell #breadcrumb .crumb-root,#shell #breadcrumb .crumb-company{color:var(--text-2);}
+#shell #breadcrumb .crumb-page{color:var(--text);}
+#shell #breadcrumb .crumb-company{display:none;}
+.source-body{color:var(--text-2);font-size:15px;line-height:1.9;}
+.company-context{margin:0 0 10px;border:1px solid var(--line);border-radius:14px;background:var(--paper);position:relative;z-index:5;}
+.company-context>summary{display:flex;gap:10px;align-items:center;min-height:48px;padding:10px 16px;cursor:pointer;list-style:none;font-size:13px;color:var(--text-2);}
+.company-context>summary::-webkit-details-marker{display:none;}
+.company-context>summary strong{color:var(--text);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.context-action{margin-left:auto;display:flex;gap:4px;align-items:center;flex-shrink:0;color:var(--tide-800);}
+.context-action .icon{width:14px;transform:rotate(90deg);}
+.company-context[open] .context-action .icon{transform:rotate(-90deg);}
+.company-context .company-panel{margin:0!important;border:0!important;box-shadow:none!important;}
+.context-help{margin:0;padding:8px 16px 14px;color:var(--text-2);font-size:12px;border-top:1px solid var(--line);}
+.overview-scope{display:flex;gap:16px;flex-wrap:wrap;margin:0 0 12px;color:var(--text-2);font-size:12px;}
+.overview-scope>span{color:var(--text-3);}
+body[data-route=overview] .overview-bento>.network-panel{min-height:320px;}
+body[data-route=overview] .network-panel .signal-canvas{min-height:250px;}
+.collection-health{margin:16px 0;padding:16px 18px;background:var(--paper);border:1px solid var(--line);border-radius:14px;}
+.collection-health-head{display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.collection-health h2{font-size:15px;margin:0;color:var(--text);}
+.collection-health-head>span{font-size:12px;color:var(--text-2);}
+.collection-times{display:flex;flex-wrap:wrap;gap:8px 28px;margin:10px 0;}
+.collection-times p{margin:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--text-2);}
+.collection-times strong{font-weight:500;color:var(--text);font-variant-numeric:tabular-nums;}
+.stale-note{color:#79500c;background:#fff4dc;padding:2px 6px;border-radius:6px;}
+.collection-health nav{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;}
+.collection-health nav a{display:flex;align-items:center;gap:10px;padding:8px 10px;min-height:40px;background:var(--paper-50);border:1px solid var(--line);border-radius:8px;color:var(--text-2);font-size:12px;}
+.collection-health nav strong{margin-left:auto;color:var(--text);font-variant-numeric:tabular-nums;}
+.collection-health nav .icon{width:13px;}
+.collection-steps{display:none;}
+.category-pills .cat-pill{max-width:none;white-space:normal;height:auto;min-height:34px;}
+.web-filters>label{min-width:140px;}
+#web-results,.verification-workspace,.inspection-panel{scroll-margin-top:var(--shell-clearance);}
+#web-results:focus{outline:2px solid var(--tide-600);outline-offset:4px;}
+.history-saved-note{margin:10px 0;color:var(--text-2);font-size:12px;line-height:1.7;}
+.wrc-head{display:block;}
+.wrc-head .wrc-check{display:flex;width:100%;min-width:0;align-items:flex-start;}
+.wrc-head .wrc-check h3{flex:1;min-width:0;overflow-wrap:anywhere;}
+.wrc-head .wrc-badges{display:flex;justify-content:flex-start;flex-wrap:wrap;margin-top:10px;}
+.inspection-panel:not([hidden]){top:var(--shell-clearance);max-height:calc(100dvh - var(--shell-clearance) - 16px);}
+.inspection-body{overscroll-behavior:contain;}
+.advanced-filters>summary{display:flex;align-items:center;min-height:36px;cursor:pointer;list-style:none;color:var(--text-2);font-size:13px;}
+.advanced-filters>summary::after{content:'展开';margin-left:auto;font-size:12px;}
+.advanced-filters[open]>summary::after{content:'收起';}
+.advanced-filters[open] .advanced-fields{padding-top:8px;}
+.release-notice{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);width:max-content;max-width:calc(100% - 24px);z-index:100;display:flex;gap:12px;align-items:center;padding:12px 16px;background:var(--paper);border:1px solid var(--line-strong);border-radius:12px;box-shadow:var(--elev-2);font-size:13px;}
+.release-notice>span{max-width:46ch;}
+@media(min-width:1001px){
+ .verification-workspace.has-inspection{display:grid;grid-template-columns:minmax(0,1fr) minmax(390px,53%);align-items:start;}
+ .verification-workspace.has-inspection .inspection-panel:not([hidden]){position:sticky;display:flex;height:calc(100dvh - var(--shell-clearance) - 16px);max-height:none;overflow:hidden;padding-bottom:0;}
+ .verification-workspace.has-inspection .inspection-body{overflow:auto;min-height:0;}
+ .verification-workspace.has-inspection .inspection-savebar{position:static;}
+}
+@media(min-width:701px) and (max-width:1000px){
+ .verification-workspace.has-inspection{display:flex;flex-direction:column;}
+ .verification-workspace.has-inspection>*{width:100%;}
+ .inspection-panel:not([hidden]){order:-1;height:auto;max-height:none;}
+}
+@media(max-width:700px){
+ .company-context>summary{padding:9px 12px;min-height:44px;gap:8px;}
+ .company-context>summary>span:first-child{font-size:11px;flex-shrink:0;}
+ .company-context>summary strong{font-size:12px;}
+ .overview-scope{font-size:11px;gap:4px;margin-bottom:8px;}
+ .overview-scope>span{display:none;}
+ body[data-route=overview] .page-heading p{display:none;}
+ body[data-route=overview] .page-heading .actions{margin-top:10px;}
+ body[data-route=overview] .kpi-strip .stat{padding:10px 12px;}
+ body[data-route=overview] .kpi-strip .stat-number{font-size:27px;margin:5px 0 0;}
+ body[data-route=overview] .kpi-strip .stat-share{display:none;}
+ body[data-route=overview] .overview-bento>.network-panel{min-height:0;}
+ body[data-route=overview] .network-panel .signal-canvas{min-height:0;}
+ .collection-health{padding:14px;}
+ .collection-health nav{grid-template-columns:repeat(2,minmax(0,1fr));}
+ .collection-health nav a{min-height:44px;}
+ .collection-health-head{align-items:flex-start;}
+ .collection-times{display:block;}
+ .collection-times p{margin:6px 0;}
+ .inspection-panel:not([hidden]){height:auto;max-height:none;}
+ .release-notice{flex-wrap:wrap;bottom:10px;}
+ .release-notice>span{flex-basis:100%;}
+}

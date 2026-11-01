@@ -1,0 +1,261 @@
+/* Premium finish: layered light, instrument-like data surfaces, and restrained micro-motion. */
+:root {
+  --premium-border:rgb(10 19 34 / 7.5%);
+  --premium-border-strong:rgb(10 19 34 / 12%);
+  --premium-card:
+    radial-gradient(120% 90% at 100% 0,rgb(15 138 134 / 3.2%),transparent 48%),
+    linear-gradient(180deg,rgb(255 255 255 / 98%),#fff 76%);
+  --premium-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 92%),
+    0 1px 2px rgb(5 10 20 / 6%),
+    0 22px 52px -42px rgb(5 10 20 / 34%);
+}
+
+body:not([data-route=auth]) {
+  background-color:var(--paper-100);
+  background-image:
+    radial-gradient(72% 42% at 100% 20%,rgb(15 138 134 / 3.5%),transparent 68%),
+    linear-gradient(180deg,#f5f7fa,var(--paper-100) 74%);
+}
+html,body { max-width:100%; overflow-x:clip; }
+@supports not (overflow:clip) { html,body { overflow-x:hidden; } }
+
+/* The ink frame stays quiet; its active state reads as a lit instrument, not a colored tab. */
+.sidebar {
+  background:
+    radial-gradient(56% 30% at 12% 0%,rgb(126 232 220 / 10%),transparent 72%),
+    radial-gradient(42% 24% at 100% 92%,rgb(212 175 106 / 5%),transparent 76%),
+    linear-gradient(180deg,#091321,var(--ink-950));
+  box-shadow:inset -1px 0 0 rgb(255 255 255 / 4%);
+}
+.sidebar::after {
+  content:''; position:absolute; inset:0; z-index:0; pointer-events:none;
+  background-image:radial-gradient(circle,rgb(255 255 255 / 11%) .5px,transparent .75px);
+  background-size:7px 7px; opacity:.18;
+  -webkit-mask-image:linear-gradient(180deg,#000,transparent 72%); mask-image:linear-gradient(180deg,#000,transparent 72%);
+}
+.sidebar>* { position:relative; z-index:1; }
+.sidebar .workspace {
+  background:
+    linear-gradient(112deg,rgb(60 207 192 / 12%),transparent 48%),
+    linear-gradient(180deg,var(--ink-800),var(--ink-850));
+  box-shadow:inset 0 1px 0 rgb(255 255 255 / 7%),0 12px 30px -24px rgb(0 0 0 / 76%);
+}
+.sidebar nav a.active {
+  background:linear-gradient(90deg,rgb(60 207 192 / 17%),rgb(60 207 192 / 2%) 84%);
+  box-shadow:inset 0 0 0 1px rgb(126 232 220 / 6%);
+}
+.sidebar nav a.active::before { width:3px; box-shadow:0 0 15px rgb(60 207 192 / 70%); }
+
+/* Reference cue: MotionSites/Aceternity-style compact eyebrow chips with an editorial hierarchy. */
+.page-eyebrow {
+  width:max-content; max-width:100%; padding:6px 10px 6px 8px;
+  border:1px solid rgb(255 255 255 / 12%); border-radius:var(--r-pill);
+  background:rgb(255 255 255 / 5%); box-shadow:inset 0 1px 0 rgb(255 255 255 / 6%);
+  -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+}
+body[data-route=overview] .page-eyebrow {
+  border-color:rgb(15 138 134 / 15%); background:rgb(255 255 255 / 72%);
+  box-shadow:inset 0 1px 0 #fff,0 5px 16px -12px rgb(10 19 34 / 28%);
+}
+.page-heading h1 { text-wrap:balance; }
+.page-heading p { max-width:68ch; text-wrap:pretty; }
+.page-heading .actions { gap:9px; }
+.demo-note { display:block; line-height:1.7; }
+.demo-note a,.demo-note .text-button { display:inline; margin-inline:2px; padding:0; vertical-align:baseline; }
+
+/* Paper surfaces gain depth from light and edge treatment rather than heavier outlines. */
+.panel,.workspace-filters,.inspection-panel {
+  border-color:var(--premium-border);
+  background-color:#fff;
+  background-image:var(--premium-card);
+  box-shadow:var(--premium-shadow);
+  transition:border-color var(--d-2) ease,box-shadow var(--d-3) ease;
+}
+.panel[data-spotlight=on],.workspace-filters[data-spotlight=on] {
+  background-image:
+    radial-gradient(420px circle at var(--mx,-999px) var(--my,-999px),rgb(15 138 134 / 6.5%),transparent 64%),
+    var(--premium-card);
+}
+.panel-heading {
+  background-image:linear-gradient(180deg,rgb(248 250 252 / 82%),rgb(255 255 255 / 0));
+}
+.panel-heading h2>.icon {
+  border-color:rgb(15 138 134 / 13%);
+  background:linear-gradient(145deg,#fff,var(--tide-50));
+  box-shadow:inset 0 1px 0 #fff,0 5px 14px -11px rgb(10 79 77 / 58%);
+}
+.panel-heading .actions { gap:8px; }
+
+/* Buttons borrow Uiverse's tactile fill and React Bits' single-pass edge highlight. */
+.primary,.secondary,.danger,.event-more-actions>summary {
+  position:relative; overflow:hidden; isolation:isolate;
+}
+.primary::before,.secondary::before,.danger::before,.event-more-actions>summary::before {
+  content:''; position:absolute; z-index:0; top:-110%; bottom:-110%; left:-35%; width:22%;
+  pointer-events:none; opacity:0; transform:translateX(0) skewX(-18deg);
+  background:linear-gradient(90deg,transparent,rgb(255 255 255 / 28%),transparent);
+}
+.secondary::before,.danger::before { background:linear-gradient(90deg,transparent,rgb(15 138 134 / 12%),transparent); }
+.primary:hover::before,.secondary:hover::before,.danger:hover::before,.event-more-actions>summary:hover::before {
+  animation:control-shine 1.75s ease-out infinite;
+}
+@keyframes control-shine {
+  0%,18% { opacity:0; transform:translateX(0) skewX(-18deg); }
+  28% { opacity:.8; }
+  68%,100% { opacity:0; transform:translateX(660%) skewX(-18deg); }
+}
+.primary>.icon,.secondary>.icon,.danger>.icon { position:relative; z-index:1; transition:transform var(--d-2) var(--ease-std); }
+.primary:hover>.icon,.secondary:hover>.icon,.danger:hover>.icon { transform:translateX(2px); }
+.primary { box-shadow:inset 0 1px 0 rgb(255 255 255 / 16%),0 8px 18px -10px rgb(5 10 20 / 58%); }
+.secondary { box-shadow:inset 0 1px 0 #fff,0 1px 0 rgb(10 19 34 / 5%),0 5px 12px -9px rgb(10 19 34 / 32%); }
+.primary[data-spotlight=on]:hover {
+  border-color:transparent;
+  background:
+    radial-gradient(110px circle at var(--mx,50%) var(--my,50%),rgb(126 232 220 / 22%),transparent 62%) padding-box,
+    linear-gradient(180deg,#1c3359,#0f1e3a) padding-box,
+    linear-gradient(118deg,rgb(126 232 220 / 76%),rgb(255 255 255 / 12%) 46%,rgb(212 175 106 / 58%)) border-box;
+}
+.secondary[data-spotlight=on]:hover {
+  border-color:transparent;
+  background:
+    radial-gradient(100px circle at var(--mx,50%) var(--my,50%),rgb(15 138 134 / 11%),transparent 64%) padding-box,
+    linear-gradient(180deg,#fff,var(--tide-50)) padding-box,
+    linear-gradient(118deg,rgb(15 138 134 / 34%),rgb(255 255 255 / 22%) 50%,rgb(212 175 106 / 30%)) border-box;
+}
+.in-deck .primary[data-spotlight=on]:hover,.signal-standby .primary[data-spotlight=on]:hover {
+  background:
+    radial-gradient(110px circle at var(--mx,50%) var(--my,50%),rgb(255 255 255 / 24%),transparent 64%) padding-box,
+    linear-gradient(180deg,#63e8db,#2bc2b4) padding-box,
+    linear-gradient(118deg,rgb(255 255 255 / 74%),rgb(126 232 220 / 48%) 50%,rgb(212 175 106 / 64%)) border-box;
+}
+body[data-route=overview] .page-heading .primary[data-spotlight=on]:hover {
+  border-color:transparent;
+  background:
+    radial-gradient(110px circle at var(--mx,50%) var(--my,50%),rgb(255 255 255 / 20%),transparent 64%) padding-box,
+    linear-gradient(180deg,var(--tide-600),var(--tide-800)) padding-box,
+    linear-gradient(118deg,rgb(126 232 220 / 86%),rgb(255 255 255 / 22%) 52%,rgb(212 175 106 / 70%)) border-box;
+}
+body[data-route=overview] .page-heading .secondary[data-spotlight=on]:hover {
+  border-color:transparent;
+  background:
+    radial-gradient(100px circle at var(--mx,50%) var(--my,50%),rgb(15 138 134 / 12%),transparent 64%) padding-box,
+    linear-gradient(180deg,#fff,var(--tide-50)) padding-box,
+    linear-gradient(118deg,rgb(15 138 134 / 38%),rgb(255 255 255 / 24%) 50%,rgb(212 175 106 / 32%)) border-box;
+}
+.company-admin-menu>summary {
+  transition:transform var(--d-2) var(--ease-std),border-color var(--d-1) ease,box-shadow var(--d-2) ease,background-color var(--d-1) ease;
+}
+.company-admin-menu>summary:hover {
+  transform:translateY(-1px); border-color:rgb(15 138 134 / 34%);
+  background:linear-gradient(180deg,#fff,var(--tide-50));
+  box-shadow:inset 0 1px 0 #fff,0 7px 16px -11px rgb(10 79 77 / 46%);
+}
+.company-admin-menu[open]>div { animation:company-menu-in 160ms var(--ease-out) both; }
+@keyframes company-menu-in { from { opacity:0; transform:translateY(-5px) scale(.985); } }
+
+/* Controls feel inset and precise; hover states remain neutral so operational data keeps priority. */
+input:not([type=checkbox]):not([type=radio]),select,textarea,
+.filters input,.filters select {
+  border-color:#d4dce6;
+  box-shadow:inset 0 1px 2px rgb(10 19 34 / 3.5%),0 1px 0 rgb(255 255 255 / 72%);
+}
+input:not([type=checkbox]):not([type=radio]):hover,select:hover,textarea:hover {
+  border-color:#c1ccda;
+  box-shadow:inset 0 1px 2px rgb(10 19 34 / 2%),0 5px 14px -12px rgb(10 19 34 / 32%);
+}
+.segmented,.chart-switch,.tabs,.auth-role {
+  box-shadow:inset 0 1px 2px rgb(10 19 34 / 8%),0 1px 0 rgb(255 255 255 / 76%);
+}
+
+/* The four KPIs share one sheet, with color appearing only on interaction and category intent. */
+.page-overview>.stats.kpi-strip,.kpi-strip {
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 94%),
+    0 2px 4px rgb(5 10 20 / 6%),
+    0 28px 60px -44px rgb(5 10 20 / 40%);
+}
+.kpi-strip .stat::after {
+  content:''; position:absolute; left:22px; right:22px; bottom:0; height:2px;
+  transform:scaleX(0); transform-origin:left;
+  background:linear-gradient(90deg,var(--tide-500),rgb(15 138 134 / 0));
+  transition:transform var(--d-3) var(--ease-out);
+}
+.kpi-strip .stat.red::after { background:linear-gradient(90deg,var(--red),rgb(200 52 74 / 0)); }
+.kpi-strip .stat.orange::after { background:linear-gradient(90deg,var(--orange),rgb(184 90 20 / 0)); }
+.kpi-strip .stat.yellow::after { background:linear-gradient(90deg,var(--yellow),rgb(143 107 4 / 0)); }
+.kpi-strip .stat:hover::after { transform:scaleX(1); }
+.kpi-strip .stat-number { text-shadow:0 1px 0 #fff; }
+
+/* The map keeps the line language while gaining the instrument-like depth of Anime.js. */
+body[data-route=overview] .overview-bento>.network-panel {
+  isolation:isolate; overflow:hidden;
+  background:
+    radial-gradient(54% 72% at 50% 58%,rgb(15 138 134 / 10%),transparent 68%),
+    radial-gradient(72% 110% at 100% 0%,rgb(15 138 134 / 4%),transparent 66%),
+    #fff;
+}
+body[data-route=overview] .overview-bento>.network-panel>* { position:relative; z-index:1; }
+body[data-route=overview] .overview-bento>.network-panel::before {
+  content:''; position:absolute; z-index:0; left:50%; top:54%; width:min(46vw,500px); aspect-ratio:1;
+  transform:translate(-50%,-50%);
+  background:repeating-radial-gradient(circle,transparent 0 43px,rgb(15 138 134 / 7%) 43.5px 44.5px,transparent 45px 82px);
+  -webkit-mask-image:radial-gradient(circle,#000 0 58%,transparent 72%); mask-image:radial-gradient(circle,#000 0 58%,transparent 72%);
+  pointer-events:none;
+}
+body[data-route=overview] .overview-bento>.network-panel::after {
+  content:''; position:absolute; z-index:0; left:50%; top:54%; width:min(43vw,460px); aspect-ratio:1;
+  transform:translate(-50%,-50%); border-radius:50%; pointer-events:none;
+  background:conic-gradient(from 198deg,transparent 0deg,transparent 286deg,rgb(15 138 134 / 8%) 322deg,transparent 356deg);
+  -webkit-mask-image:radial-gradient(circle,transparent 0 28%,#000 29% 100%); mask-image:radial-gradient(circle,transparent 0 28%,#000 29% 100%);
+  animation:network-scan 20s linear infinite;
+}
+@keyframes network-scan { to { rotate:360deg; } }
+.network-panel .network-halo { animation:network-breathe 5.2s ease-in-out infinite; transform-box:fill-box; transform-origin:center; }
+@keyframes network-breathe { 50% { opacity:.68; scale:1.035; } }
+.network-panel .network-link { filter:drop-shadow(0 0 4px rgb(15 138 134 / 18%)); }
+.network-panel .network-core { filter:drop-shadow(0 0 11px rgb(15 138 134 / 24%)); }
+.network-panel .signal-network a .network-node { transition:fill var(--d-2) ease,stroke var(--d-2) ease,transform var(--d-2) var(--ease-std); transform-box:fill-box; transform-origin:center; }
+body[data-route=overview] .network-panel .signal-network a:hover .network-node,
+body[data-route=overview] .network-panel .signal-network a:focus-visible .network-node {
+  fill:#f1faf8; stroke:var(--tide-600); stroke-width:1.2;
+}
+.network-panel .signal-network a:hover .network-node,.network-panel .signal-network a:focus-visible .network-node { transform:translateY(-2px); }
+.network-panel .signal-network a:hover .network-label,
+.network-panel .signal-network a:focus-visible .network-label { fill:var(--text); }
+.network-panel .signal-network a:hover .network-count,
+.network-panel .signal-network a:focus-visible .network-count { fill:var(--text-2); }
+.network-panel .network-port { filter:drop-shadow(0 0 4px rgb(15 138 134 / 68%)); }
+.standby-core { filter:drop-shadow(0 0 8px rgb(15 138 134 / 30%)); }
+.is-revealing .standby-core { animation:standby-pulse 1.8s var(--ease-out) 180ms both; }
+@keyframes standby-pulse { 50% { transform:scale(1.12); transform-origin:180px 120px; } }
+
+/* Ledger rows and small metadata inherit the same precision as the rest of the shell. */
+th,.event-results th {
+  background:linear-gradient(180deg,rgb(248 250 252 / 96%),rgb(243 246 249 / 96%));
+  box-shadow:inset 0 1px 0 #fff;
+  font-weight:600;
+}
+tbody tr:hover .event-link { color:var(--tide-800); }
+.pagination { box-shadow:inset 0 1px 0 rgb(255 255 255 / 80%); }
+.chart-footnote { box-shadow:inset 0 1px 0 rgb(255 255 255 / 78%); }
+
+/* The setup steps are reference-style glass modules on the dark deck. */
+.collection-steps li {
+  transition:transform var(--d-2) var(--ease-std),border-color var(--d-2) ease,background-color var(--d-2) ease;
+}
+.collection-steps li:hover {
+  transform:translateY(-2px); border-color:rgb(126 232 220 / 28%);
+  background:linear-gradient(180deg,rgb(255 255 255 / 8%),rgb(255 255 255 / 3%));
+}
+
+@media (hover:none) {
+  .primary::before,.secondary::before,.danger::before,.event-more-actions>summary::before { display:none; }
+  .company-admin-menu>summary:hover,.collection-steps li:hover { transform:none; }
+}
+@media (prefers-reduced-motion:reduce) {
+  body[data-route=overview] .overview-bento>.network-panel::after,
+  .network-panel .network-halo,
+  .is-revealing .standby-core { animation:none; }
+  .primary::before,.secondary::before,.danger::before,.event-more-actions>summary::before { display:none; }
+}
