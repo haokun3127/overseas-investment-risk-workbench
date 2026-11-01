@@ -60,7 +60,7 @@ class Record(BaseModel):
     source: str = ''
     url: str = ''
     kind: str = 'event'
-    allow_external: bool = False
+    allow_external: bool = True
 
 class JobRequest(BaseModel):
     document_ids: list[int] = Field(min_length=1,max_length=100)
@@ -68,9 +68,6 @@ class JobRequest(BaseModel):
 class Review(BaseModel):
     status: str
     note: str = Field(default='',max_length=2000)
-
-class DocumentPolicy(BaseModel):
-    allow_external: bool
 
 def password_hash(password,salt):
     return hashlib.pbkdf2_hmac('sha256',password.encode(),bytes.fromhex(salt),300000).hex()
@@ -160,7 +157,7 @@ def create_app(settings=None, run_worker=True):
 
     @app.get('/api/release')
     def release():
-        return JSONResponse({'version':'20261101-countermeasures'},headers={'Cache-Control':'no-store'})
+        return JSONResponse({'version':'20261101-direct-analysis'},headers={'Cache-Control':'no-store'})
 
     @app.get('/api/health')
     def health(): return {'status':'ok'}
@@ -224,7 +221,7 @@ def create_app(settings=None, run_worker=True):
         if len(uname)<3 or uname.lower()=='admin':
             raise ValueError('登录账号须为3至60个字符，且不能使用保留名称 admin。')
         profile={k:getattr(data,k).strip() if isinstance(getattr(data,k),str) else getattr(data,k) for k in companies.LABELS}
-        profile['allow_external']=bool(data.allow_external)
+        profile['allow_external']=True
         if not profile['name']:
             raise ValueError('请填写公司名称。')
         salt=secrets.token_hex(16)
@@ -323,7 +320,7 @@ def create_app(settings=None, run_worker=True):
         return {'id':doc_id,'created':created}
 
     @app.post('/api/import')
-    async def upload(request:Request,file:UploadFile=File(...),kind:str=Form('event'),allow_external:bool=Form(False)):
+    async def upload(request:Request,file:UploadFile=File(...),kind:str=Form('event'),allow_external:bool=Form(True)):
         if kind not in ('event','knowledge'): raise ValueError('资料用途无效。')
         cid=getattr(request.state,'company_id',None)
         content=await file.read(settings.max_upload+1)
@@ -373,8 +370,6 @@ def create_app(settings=None, run_worker=True):
             else:
                 where+=' AND (d.company_id=? OR (d.company_id IS NULL AND d.id NOT IN (SELECT document_id FROM companies WHERE document_id IS NOT NULL)))'
                 args.append(cid)
-        if policy in ('local','external'):
-            where+=' AND d.allow_external=?'; args.append(int(policy=='external'))
         if status=='unanalysed':
             where+=' AND NOT EXISTS(SELECT 1 FROM analyses a WHERE a.document_id=d.id)'
         elif status in ('queued','running','failed','completed'):
@@ -412,22 +407,6 @@ def create_app(settings=None, run_worker=True):
             row['events']=store.rows('SELECT id,title FROM events WHERE analysis_id=?',(row['id'],))
         return doc
 
-    @app.patch('/api/documents/{doc_id}/policy')
-    def document_policy(doc_id:int,data:DocumentPolicy,request:Request):
-        cid=getattr(request.state,'company_id',None)
-        doc=store.one('SELECT id,company_id,quarantined_at FROM documents WHERE id=?',(doc_id,))
-        if not doc or (cid is not None and doc.get('company_id')!=cid):
-            raise HTTPException(404,'资料不存在或无权修改。')
-        if doc['quarantined_at']:
-            raise HTTPException(409,'资料已隔离待核实，不能修改外发授权。')
-        with store.db() as db:
-            if db.execute("SELECT id FROM jobs WHERE status IN ('queued','running') AND (document_id=? OR EXISTS(SELECT 1 FROM json_each(jobs.supplements_json) s WHERE json_extract(s.value,'$.document_id')=?))",(doc_id,doc_id)).fetchone():
-                raise HTTPException(409,'资料有待处理任务，请等待任务结束后修改授权范围。')
-            if db.execute('UPDATE documents SET allow_external=? WHERE id=? AND demo=0',(int(data.allow_external),doc_id)).rowcount==0:
-                raise HTTPException(404,'资料不存在或属于不可修改的演示资料。')
-        store.audit('document_policy_changed',f'document={doc_id}, allow_external={data.allow_external}',company_id=doc['company_id'])
-        return {'ok':True}
-
     @app.get('/api/documents/{doc_id}/file')
     def original(doc_id:int,request:Request):
         cid=getattr(request.state,'company_id',None)
@@ -460,7 +439,6 @@ def create_app(settings=None, run_worker=True):
                     raise ValueError(f'资料 {doc_id} 不是当前公司的待分析资料。')
                 if doc['demo']: raise ValueError('内置演示资料不进入真实分析，请导入新的测试资料。')
                 if doc['quarantined_at']: raise ValueError(f'资料 {doc_id} 已隔离，不能进入分析。')
-                if not doc['allow_external']: raise ValueError(f'资料 {doc_id} 未获准发送外部模型，请在原文页核实并修改授权范围。')
                 checked[doc_id]=doc
             result=[]
             for doc_id in ids:
@@ -531,9 +509,8 @@ def create_app(settings=None, run_worker=True):
                 if doc['kind']!='event': reasons.append('参考资料不能直接启动风险分析')
                 if doc['demo']: reasons.append('虚构演示资料不能进入真实分析')
                 if doc['quarantined_at']: reasons.append('资料已隔离（待核实）')
-                if not doc['allow_external']: reasons.append('尚未授权外部分析')
                 linked=store.rows('SELECT d.allow_external,d.quarantined_at FROM document_evidence e JOIN documents d ON d.id=e.supplement_id WHERE e.document_id=?',(doc_id,))
-                if any(not d['allow_external'] or d['quarantined_at'] for d in linked): reasons.append('部分补充材料尚未授权或已隔离，请到待补证入口处理')
+                if any(d['quarantined_at'] for d in linked): reasons.append('部分补充材料已隔离，请到待补证入口处理')
             active=store.one("SELECT id FROM jobs WHERE document_id=? AND status IN ('queued','running')",(doc_id,)) if doc else None
             owner=doc.get('company_id') if doc else None
             company=companies.current(store,owner) if owner else None
@@ -758,7 +735,7 @@ def create_app(settings=None, run_worker=True):
                 'queue':store.rows('SELECT status,COUNT(*) count FROM jobs GROUP BY status'),
                 'worker_enabled':run_worker,'backup':last_backup(),
                 'fetch_proxy':bool(websearch.FETCH_PROXY),'renderer':bool(websearch.RENDERER),
-                'enrich_pending':store.one("SELECT COUNT(*) n FROM documents WHERE kind='knowledge' AND demo=0 AND quarantined_at IS NULL AND allow_external=1 AND zh_state=''")['n'],
+                'enrich_pending':store.one("SELECT COUNT(*) n FROM documents WHERE kind='knowledge' AND demo=0 AND quarantined_at IS NULL AND zh_state=''")['n'],
                 'enrich_failed':store.one("SELECT COUNT(*) n FROM documents WHERE kind='knowledge' AND quarantined_at IS NULL AND zh_state='failed'")['n'],
                 'vectors':vector_status(store),
                 'model_error':model_error(),'last_analysis':store.one('SELECT created_at,model,mode FROM analyses ORDER BY id DESC LIMIT 1')}

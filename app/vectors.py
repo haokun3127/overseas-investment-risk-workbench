@@ -56,7 +56,7 @@ MODEL_SPECS = (
     ModelSpec('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2', '', '', 400, 0.28, 0.10, 0.30),
 )
 
-ELIGIBLE = "d.kind='knowledge' AND d.demo=0 AND d.quarantined_at IS NULL AND d.allow_external=1"
+ELIGIBLE = "d.kind='knowledge' AND d.demo=0 AND d.quarantined_at IS NULL"
 FINGERPRINT = "c.document_id||':'||length(c.text)||':'||length(d.title)||':'||length(ifnull(d.zh_keywords,''))"
 
 _lock = threading.RLock()
@@ -340,7 +340,7 @@ def similar_chunks(store, text, limit, external, company_id):
     spec = active_spec()
     query = _blob(embed(store, [text], 'query')[0])
     owner_id = company_id or 0
-    condition = ' AND d.allow_external=1' if external else ''
+    condition = ''  # All in-scope, non-quarantined knowledge can support analysis.
     with _open(store) as conn:
         _check_model(conn)
         owner = _owner_sql(conn)

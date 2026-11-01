@@ -129,7 +129,7 @@ def _bm25_concepts(groups, counters):
     return scores, matched_groups
 
 def retrieve(store, query, external=False, limit=4, company_id=None, per_document=False):
-    condition = " AND d.allow_external=1" if external else ""
+    condition = ""  # Legacy external argument no longer restricts eligible knowledge.
     rows = store.rows("""SELECT c.id,c.document_id,c.locator,c.text,d.title,d.source,d.date,d.zh_summary,d.zh_keywords,d.company_id FROM chunks c
         JOIN documents d ON d.id=c.document_id WHERE d.kind='knowledge' AND d.demo=0 AND d.quarantined_at IS NULL""" + condition + " ORDER BY c.id")
     scoped = store.rows("SELECT document_id,id FROM companies WHERE document_id IS NOT NULL") if store.one("SELECT name FROM sqlite_master WHERE type='table' AND name='companies'") else []

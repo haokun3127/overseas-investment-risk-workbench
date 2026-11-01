@@ -114,7 +114,7 @@ def insert_document(store, record, kind='event', allow_external=False, demo=Fals
                 title,date,source,url,body,kind,allow_external,demo,digest,file_path,filename,created_at,company_id,
                 date_source,archived_at,fetched_at
             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', (
-                r['title'], r['date'], r['source'], r['url'], r['body'], kind, int(allow_external),
+                r['title'], r['date'], r['source'], r['url'], r['body'], kind, int(not demo),
                 int(demo), digest, file_path, filename, now(), company_id, date_source,
                 str(meta.get('archived_at') or ''), str(meta.get('fetched_at') or ''),
             )).lastrowid

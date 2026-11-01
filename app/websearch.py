@@ -745,7 +745,7 @@ class SourceInput(BaseModel):
     keywords: str = Field(min_length=1,max_length=500)
     max_pages: int = Field(default=10,ge=1,le=20)
     interval_hours: int = Field(default=0,ge=0,le=168)
-    allow_external: bool = False
+    allow_external: bool = True
     auto_import: str = 'none'
     auto_analyze: bool = False
     category: str = Field(default='',max_length=60)
@@ -760,7 +760,7 @@ class SourceBatchItem(BaseModel):
 class SourceBatch(BaseModel):
     items: list[SourceBatchItem] = Field(min_length=1,max_length=500)
     max_pages: int = Field(default=5,ge=1,le=20)
-    allow_external: bool = False
+    allow_external: bool = True
 
 class ToggleInput(BaseModel):
     enabled: bool
@@ -820,7 +820,6 @@ def transfer(store,settings,page_ids,kind,analyze=False,company_id=None):
         page=store.one('SELECT p.*,r.config_json,r.status FROM web_pages p JOIN web_runs r ON r.id=p.run_id WHERE p.id=?',(page_id,))
         if not page or page['status']!='completed' or page['relevant']!=1: raise ValueError('只能入库已完成检索中的相关页面。')
         source=json.loads(page['config_json'])
-        if analyze and not source['allow_external']: raise ValueError('该来源尚未授权外部分析。')
         pages.append((page,source))
     result=[]
     for page,source in pages:
@@ -928,7 +927,6 @@ class Collector:
             if not db.execute("UPDATE web_runs SET status='running' WHERE id=? AND status='queued'",(run_id,)).rowcount:return
         try:
             if not self.settings.configured: raise ValueError('AI检索需要先配置模型服务。')
-            if not source['allow_external']: raise ValueError('请授权将该网站的网页内容发送给外部AI服务。')
             base=source['url'];live=True;live_error='';pages=[];unjudged=0;review_only=bool(source.get('review_only'))
             connector=None if review_only else api_connector(base)
             if review_only:
@@ -1133,7 +1131,7 @@ def router(store,settings):
                 if url in existing: skipped+=1;continue
                 existing.add(url)
                 db.execute('INSERT INTO web_sources(name,url,keywords,max_pages,interval_hours,allow_external,auto_import,auto_analyze,next_run,created_at,category) VALUES (?,?,?,?,0,?,?,0,0,?,?)',
-                           (item.name.strip(),url,item.keywords.strip(),data.max_pages,int(data.allow_external),'none',now(),item.category.strip()))
+                           (item.name.strip(),url,item.keywords.strip(),data.max_pages,1,'none',now(),item.category.strip()))
                 created+=1
         store.audit('website_imported_sources',f'created={created}, skipped={skipped}, errors={len(errors)}')
         return {'created':created,'skipped':skipped,'errors':errors}
@@ -1154,8 +1152,8 @@ def router(store,settings):
     @api.post('/runs/group')
     def run_group(data:GroupRunInput):
         if not settings.configured:raise ValueError('请先配置AI模型。')
-        rows=store.rows('SELECT * FROM web_sources WHERE category=? AND enabled=1 AND allow_external=1 AND deleted_at IS NULL ORDER BY id LIMIT 100',(data.category,))
-        if not rows:raise ValueError('该分组没有已启用且已授权外部AI的网站。')
+        rows=store.rows('SELECT * FROM web_sources WHERE category=? AND enabled=1 AND deleted_at IS NULL ORDER BY id LIMIT 100',(data.category,))
+        if not rows:raise ValueError('该分组没有已启用的网站。')
         batch=data.category+'@'+now()
         ids=[queue_run(store,row,batch) for row in rows]
         store.audit('website_group_run',f'category={data.category}, count={len(ids)}')
@@ -1173,10 +1171,9 @@ def router(store,settings):
             raise ValueError('自动保存风险资料时必须选择归属公司。')
         if value['target_company_id'] and not store.one('SELECT id FROM companies WHERE id=?',(value['target_company_id'],)):
             raise ValueError('风险资料归属公司不存在。')
-        if value['interval_hours'] and not value['allow_external']:raise ValueError('定时AI检索需要网站外发授权。')
         if value['auto_analyze'] and not store.setting('rules')['confirmed']:raise ValueError('自动分析需先确认风险规则。')
         with store.db() as db:
-            values=(value['name'].strip(),value['url'],value['keywords'].strip(),value['max_pages'],value['interval_hours'],int(value['allow_external']),value['auto_import'],int(value['auto_analyze']),time.time()+value['interval_hours']*3600,value['category'].strip(),value['target_company_id'])
+            values=(value['name'].strip(),value['url'],value['keywords'].strip(),value['max_pages'],value['interval_hours'],1,value['auto_import'],int(value['auto_analyze']),time.time()+value['interval_hours']*3600,value['category'].strip(),value['target_company_id'])
             if source_id is None:
                 source_id=db.execute('INSERT INTO web_sources(name,url,keywords,max_pages,interval_hours,allow_external,auto_import,auto_analyze,next_run,category,target_company_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',values+(now(),)).lastrowid
             else:
@@ -1195,7 +1192,6 @@ def router(store,settings):
         if not source:raise HTTPException(404,'网站不存在。')
         if not source['enabled']:raise ValueError('该网站已停用，请先启用再检索。')
         if not settings.configured:raise ValueError('请先配置AI模型。')
-        if not source['allow_external']:raise ValueError('请先授权网站内容发送至外部AI。')
         return {'id':queue_run(store,source)}
     @api.get('/runs')
     def runs(page:int=1,size:int=30):

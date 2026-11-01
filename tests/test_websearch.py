@@ -111,10 +111,12 @@ def test_public_dns_and_address_validation(monkeypatch):
     monkeypatch.setattr(socket,'getaddrinfo',lambda *a,**kw:[(socket.AF_INET,socket.SOCK_STREAM,6,'',('8.8.8.8',443))])
     assert websearch.public_address('example.com',443)=='8.8.8.8'
 
-def test_authorization_cancel_edit_pause(web_client):
+def test_direct_search_cancel_edit_pause(web_client):
     c=web_client;sid=add_source(c,allow_external=False)
-    assert c.post('/api/web/runs',json={'source_id':sid}).status_code==400
-    assert c.post('/api/web/sources',json={'name':'定时','url':'https://example.com/','keywords':'政策','interval_hours':24}).status_code==400
+    run=c.post('/api/web/runs',json={'source_id':sid})
+    assert run.status_code==200
+    assert c.post('/api/web/runs/'+str(run.json()['id'])+'/cancel').status_code==200
+    assert c.post('/api/web/sources',json={'name':'定时','url':'https://example.com/','keywords':'政策','interval_hours':24}).status_code==200
     sid=add_source(c,interval_hours=24)
     rid=c.post('/api/web/runs',json={'source_id':sid}).json()['id']
     assert c.post('/api/web/runs',json={'source_id':sid}).json()['id']==rid

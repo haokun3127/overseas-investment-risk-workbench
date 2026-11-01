@@ -21,11 +21,9 @@ def test_preflight_cancellation_and_worker_claim(client):
     s=client.app.state.settings;s.model_mode='external';s.model_base_url='';s.model_name='';s.model_api_key=''
     check=client.post('/api/jobs/preflight',json={'document_ids':[doc_id]}).json()
     assert not check['ready'] and len(check['blockers'])==2
-    assert check['items'][0]['issues']==['尚未授权外部分析']
+    assert check['items'][0]['issues']==[]
     s.model_mode='external';s.model_base_url='https://example.test/v1';s.model_name='test';s.model_api_key='test'
     rules=copy.deepcopy(DEFAULT_RULES);rules['confirmed']=True;client.put('/api/rules',json=rules)
-    assert not client.post('/api/jobs/preflight',json={'document_ids':[doc_id]}).json()['ready']
-    client.patch(f'/api/documents/{doc_id}/policy',json={'allow_external':True})
     assert client.post('/api/jobs/preflight',json={'document_ids':[doc_id]}).json()['ready']
     jid=client.post('/api/jobs',json={'document_ids':[doc_id]}).json()['items'][0]['id']
     store=client.app.state.store
@@ -66,8 +64,8 @@ def test_workspace_filters_export_and_review_history(client):
     external_id=add(client,title='允许外发的资料',body='这是允许外发的另一份完整测试正文。',allow_external=True)
     workspace=client.get('/api/workspace').json()
     assert workspace['unanalyzed']==2
-    assert workspace['documents']['event']['authorized']==1
-    assert [r['id'] for r in client.get('/api/documents?policy=external').json()['items']]==[external_id]
+    assert workspace['documents']['event']['authorized']==2
+    assert {r['id'] for r in client.get('/api/documents?policy=external').json()['items']}=={external_id,local_id}
     assert [r['id'] for r in client.get('/api/documents?q=本地业务').json()['items']]==[local_id]
     assert client.get('/api/documents?status=unanalysed').json()['total']==2
     client.post('/api/demo')
@@ -172,13 +170,13 @@ def test_invalid_imports(client):
     assert client.post('/api/import',files={'file':('macro.exe',b'hello')}).status_code==400
     assert client.post('/api/import',files={'file':('sample.txt',b'x'*(10*1024*1024+1))}).status_code==413
 
-def test_retrieval_respects_external_permission_and_demo(client):
+def test_retrieval_includes_all_in_scope_knowledge(client):
     local=add(client,title='供电应急知识',body='供电设施故障时需核实停电范围并启用应急供电方案。',kind='knowledge')
     allowed=add(client,title='可外发供电知识',body='供电中断影响生产时，应记录供电恢复计划。',kind='knowledge',allow_external=True)
     store=client.app.state.store
     assert local in {r['document_id'] for r in retrieve(store,'供电设施故障')}
-    results=retrieve(store,'供电设施故障',external=True)
-    assert local not in {r['document_id'] for r in results}
+    results=retrieve(store,'供电',external=True)
+    assert local in {r['document_id'] for r in results}
     assert allowed in {r['document_id'] for r in results}
 
 def test_job_preconditions(client):
@@ -188,7 +186,7 @@ def test_job_preconditions(client):
     assert client.post('/api/jobs',json={'document_ids':[doc_id]}).status_code==409
     rules=copy.deepcopy(DEFAULT_RULES);rules['confirmed']=True
     assert client.put('/api/rules',json=rules).status_code==200
-    assert client.post('/api/jobs',json={'document_ids':[doc_id]}).status_code==400
+    assert client.post('/api/jobs',json={'document_ids':[doc_id]}).status_code==200
     allowed=add(client,title='授权资料',allow_external=True)
     first=client.post('/api/jobs',json={'document_ids':[allowed]}).json()
     second=client.post('/api/jobs',json={'document_ids':[allowed]}).json()
@@ -281,13 +279,14 @@ def test_static_assets_have_local_only_policy(client):
     assert "script-src 'self'" in response.headers['Content-Security-Policy']
     assert client.get('/static/app.js').status_code==200
 
-def test_policy_change_and_running_task_guard(client):
+def test_retired_policy_endpoint_and_running_delete_guard(client):
     doc_id=add(client)
-    assert client.patch(f'/api/documents/{doc_id}/policy',json={'allow_external':True}).status_code==200
+    assert client.patch(f'/api/documents/{doc_id}/policy',json={'allow_external':True}).status_code==404
     assert client.get(f'/api/documents/{doc_id}').json()['allow_external']==1
     with client.app.state.store.db() as db:
         db.execute("INSERT INTO jobs(document_id,status,created_at) VALUES (?,'queued','test')",(doc_id,))
-    assert client.patch(f'/api/documents/{doc_id}/policy',json={'allow_external':False}).status_code==409
+    assert client.patch(f'/api/documents/{doc_id}/policy',json={'allow_external':False}).status_code==404
+    assert client.delete(f'/api/documents/{doc_id}').status_code==400
 
 def test_backup_preserves_documents_and_files(client,tmp_path):
     from scripts.manage import backup

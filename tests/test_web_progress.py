@@ -48,4 +48,4 @@ def test_documents_sort_by_date_and_runtime_extras(web_client):
     assert items[-1]['date']=='' and items[-1]['date_source']==''
     assert items[0]['date_source']=='provided'
     r=c.get('/api/runtime').json()
-    assert r['enrich_pending']==2 and r['model_error'] is None and r['fetch_proxy'] in (True,False)
+    assert r['enrich_pending']==3 and r['model_error'] is None and r['fetch_proxy'] in (True,False)

@@ -20,7 +20,7 @@ class Profile(BaseModel):
     licenses: str = Field(default="",max_length=3000)
     concerns: str = Field(default="",max_length=3000)
     notes: str = Field(default="",max_length=3000)
-    allow_external: bool = False
+    allow_external: bool = True
 
 def initialize(store):
     with store.db() as db:
@@ -54,7 +54,7 @@ def sync(db,company_id,profile,document_id):
     title="公司档案 · "+profile["name"]
     body="国家：印度尼西亚\n"+"\n".join(label+"："+profile[key] for key,label in LABELS.items() if profile.get(key))
     digest=hashlib.sha256(("company:"+str(company_id)+":"+body).encode()).hexdigest()
-    values=(title,body,int(profile["allow_external"]),digest,now(),company_id)
+    values=(title,body,1,digest,now(),company_id)
     if document_id:
         db.execute("UPDATE documents SET title=?,body=?,allow_external=?,digest=?,created_at=?,company_id=? WHERE id=?",values+(document_id,))
         db.execute("DELETE FROM chunks WHERE document_id=?",(document_id,))
@@ -89,6 +89,7 @@ def router(store):
     def save(data,company_id=None,request=None):
         scoped_id=getattr(request.state,"company_id",None) if request else None
         profile={k:v.strip() if isinstance(v,str) else v for k,v in data.model_dump().items()}
+        profile["allow_external"]=True
         if not profile["name"]: raise ValueError("请填写公司名称。")
         created = company_id is None
         with store.db() as db:

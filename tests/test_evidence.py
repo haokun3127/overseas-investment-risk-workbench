@@ -44,7 +44,7 @@ def test_complete_supplement_flow_preserves_history_and_citations(app,admin,monk
     queued=admin.post(f'/api/evidence/{aid}/reanalyze').json()['id']
     assert admin.post(f'/api/evidence/{aid}/reanalyze').json()=={'id':queued,'existing':True}
     assert admin.delete(f'/api/evidence/{aid}/supplements/{sid}').status_code==409
-    assert admin.patch(f'/api/documents/{sid}/policy',json={'allow_external':False}).status_code==409
+    assert admin.patch(f'/api/documents/{sid}/policy',json={'allow_external':False}).status_code==404
     assert admin.delete(f'/api/documents/{sid}').status_code==400
     rules=app.state.store.setting('rules');rules['version']='changed-after-submit';rules['confirmed']=False
     app.state.store.set_setting('rules',rules)
@@ -89,8 +89,6 @@ def test_supplements_respect_tenant_scope_and_auth(app,companies,admin,monkeypat
         ('post',f'/api/evidence/{aid}/upload',{'files':{'file':('test.txt',b'hello')}}),
     ]:
         assert getattr(b,method)(path,**kwargs).status_code==404
-    assert a.post(f'/api/evidence/{aid}/reanalyze').status_code==409
-    assert a.patch(f'/api/documents/{sid}/policy',json={'allow_external':True}).status_code==200
     assert a.post(f'/api/evidence/{aid}/reanalyze').status_code==200
     assert admin.get('/api/evidence').json()['total']==1
     with TestClient(app) as anon:
@@ -156,12 +154,9 @@ def test_queued_manual_rules_are_frozen_and_upgrade_is_idempotent(app,admin,monk
     assert store.one('SELECT rules_json FROM jobs WHERE id=?',(legacy,))['rules_json']==row['rules_json']
 
 
-def test_normal_retry_keeps_linked_supplements_and_checks_policy(app,admin,monkeypatch):
+def test_normal_retry_keeps_linked_supplements_without_consent(app,admin,monkeypatch):
     doc,aid=insufficient(app,admin,monkeypatch)
     sid=supplement(admin,aid,allow_external=False).json()['id']
-    assert not admin.post('/api/jobs/preflight',json={'document_ids':[doc]}).json()['ready']
-    assert admin.post('/api/jobs',json={'document_ids':[doc]}).status_code==400
-    admin.patch(f'/api/documents/{sid}/policy',json={'allow_external':True})
     assert admin.post('/api/jobs/preflight',json={'document_ids':[doc]}).json()['ready']
     job=admin.post('/api/jobs',json={'document_ids':[doc]}).json()['items'][0]['id']
     queued=app.state.store.one('SELECT * FROM jobs WHERE id=?',(job,))
@@ -171,14 +166,14 @@ def test_normal_retry_keeps_linked_supplements_and_checks_policy(app,admin,monke
     assert 'supplements_json' not in listed and 'rules_json' not in listed
 
 
-def test_supplement_limit_and_worker_rechecks_revoked_evidence(app,admin,monkeypatch):
+def test_supplement_limit_and_worker_rechecks_quarantined_evidence(app,admin,monkeypatch):
     doc,aid=insufficient(app,admin,monkeypatch)
     sid=supplement(admin,aid,body='补充事实。'*4000).json()['id']
     assert supplement(admin,aid,title='超限材料',body='补充。'*2000).status_code==409
     queued=admin.post(f'/api/evidence/{aid}/reanalyze').json()['id']
-    with app.state.store.db() as db:db.execute('UPDATE documents SET allow_external=0 WHERE id=?',(sid,))
+    with app.state.store.db() as db:db.execute('UPDATE documents SET quarantined_at=? WHERE id=?',('2026-11-01',sid))
     called=[]
-    async def must_not_call(*args,**kwargs):called.append(True);raise AssertionError('no unauthorized calls')
+    async def must_not_call(*args,**kwargs):called.append(True);raise AssertionError('no quarantined calls')
     monkeypatch.setattr(model,'call_model',must_not_call)
     asyncio.run(app.state.worker.process(app.state.store.one('SELECT * FROM jobs WHERE id=?',(queued,))))
     assert not called

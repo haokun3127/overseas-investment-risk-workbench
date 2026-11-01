@@ -22,7 +22,7 @@ class Supplement(BaseModel):
     body: str = Field(min_length=1, max_length=MAX_SUPPLEMENT_TEXT)
     source: str = Field(default='', max_length=300)
     url: str = Field(default='', max_length=2000)
-    allow_external: bool = False
+    allow_external: bool = True
 
 
 def reasons(result):
@@ -127,7 +127,7 @@ def router(store, settings):
         return attach(analysis_id,request,data.model_dump(),data.allow_external)
 
     @api.post('/{analysis_id}/upload')
-    async def upload(analysis_id:int,request:Request,file:UploadFile=File(...),allow_external:bool=Form(False)):
+    async def upload(analysis_id:int,request:Request,file:UploadFile=File(...),allow_external:bool=Form(True)):
         case(analysis_id,request,editable=True)
         content = await file.read(settings.max_upload+1)
         if len(content)>settings.max_upload:
@@ -169,8 +169,6 @@ def router(store, settings):
             active = db.execute("SELECT id FROM jobs WHERE document_id=? AND status IN ('queued','running')",(row['document_id'],)).fetchone()
             if active:
                 return {'id':active['id'],'existing':True}
-            if not row['allow_external']:
-                raise HTTPException(409,'原资料尚未授权外部分析，请先在原文页调整授权。')
             docs = db.execute('SELECT d.* FROM document_evidence e JOIN documents d ON d.id=e.supplement_id WHERE e.document_id=? ORDER BY d.id',(row['document_id'],)).fetchall()
             if not docs:
                 raise HTTPException(409,'请先保存至少一份补充材料。')

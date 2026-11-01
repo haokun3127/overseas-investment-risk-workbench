@@ -288,8 +288,8 @@ class Store:
         docs = db.execute('''SELECT d.*,o.company_id owner FROM document_evidence e
             JOIN documents d ON d.id=e.supplement_id JOIN documents o ON o.id=e.document_id
             WHERE e.document_id=? ORDER BY d.id''',(document_id,)).fetchall()
-        if any(not d['allow_external'] or d['quarantined_at'] or d['company_id']!=d['owner'] for d in docs):
-            raise ValueError('部分补充材料未授权外发或已隔离，请到待补证入口核对授权或移除关联。')
+        if any(d['quarantined_at'] or d['company_id']!=d['owner'] for d in docs):
+            raise ValueError('部分补充材料已隔离或归属不一致，请到待补证入口核对或移除关联。')
         if len(docs)>10 or sum(len(d['body']) for d in docs)>24000:
             raise ValueError('关联补充材料超过上限，请到待补证入口精简材料。')
         return [dict(c) for d in docs for c in db.execute('''SELECT c.id,c.document_id,c.locator,c.text,d.title

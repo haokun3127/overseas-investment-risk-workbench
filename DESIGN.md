@@ -164,3 +164,11 @@ Taste审查后的定向优化：演示内容只保留小型“示例”标记与
 分级对策库依次提供五级选择、所选等级的预警标准与原文阈值、企业和国家两类对策、逐项表格定位及来源下载。桌面角色列表为两列（1.2:1），间隔32px；700px及以下变为单列，等级导航变为两列并让第五项占满一行。标准正文15px、对策正文桌面14px/手机15px、定位与数量12px、说明13px；等级控件最小高度桌面46px/手机48px，手机原文下载入口至少44px。所选等级以边界和文字共同表达，原生链接保留 `aria-current` 与可见键盘焦点。
 
 原文对策保持可选参考语气，企业适用性和国家层面有权机构说明随角色标题展示；原文阈值明确区别于事件得分。事件详情和就地核验区将原文参考与模型建议分列，简报附录按涉及等级各汇总一次，并保留角色、定位及最终来源。缺失原文或旧等级提供说明，不自动换算、采取措施、重跑模型或改写事件。功能边界见 [GRADE-COUNTERMEASURES.md](C:/Users/10397/Desktop/弹子石智能体_交付包/tmp/rag-customer-parity-20261101/docs/GRADE-COUNTERMEASURES.md)；本次界面复核结论为 `ship`，详见 [COUNTERMEASURE-UI-REVIEW.md](C:/Users/10397/Desktop/弹子石智能体_交付包/tmp/rag-customer-parity-20261101/docs/COUNTERMEASURE-UI-REVIEW.md)。
+
+## 2026-11-01 资料直接分析流程
+
+本次为现有 Operate 工作台的流程精简，沿用玄墨导航、纸白阅读表面、潮汐青操作及现有桌面/手机布局，没有新增 CSS。资料列表、导入表单、原文详情及相关公司、补充材料、网站表单移除逐项外部 AI 授权控件、设置、筛选与状态徽章。前文历史中的逐项外发授权要求在本范围内不再适用；来源追溯、运行状态与业务复核继续保留。
+
+风险资料的文件上传和手动录入统一使用“导入并分析资料”，保存成功后自动提交后台分析队列，无需勾选授权或自动分析；知识库使用“导入知识库”，进入检索和中文摘要处理范围。保留现有保存中、排队、失败原因与分析历史反馈，模型或规则尚未就绪时明确说明未启动原因。旧授权字段不再决定能否使用资料，取消授权不会自动重跑或覆盖既有模型结果。企业/登录边界、隔离、演示限制、模型配置与规则检查仍生效；网站启停、调度及其自动入库/分析设置仍是独立操作流程。
+
+功能说明见 [DIRECT-ANALYSIS.md](C:/Users/10397/Desktop/弹子石智能体_交付包/tmp/rag-customer-parity-20261101/docs/DIRECT-ANALYSIS.md)，范围说明见 [.impeccable/surfaces/web-direct-analysis.md](C:/Users/10397/Desktop/弹子石智能体_交付包/tmp/rag-customer-parity-20261101/.impeccable/surfaces/web-direct-analysis.md)。界面复核结论为 `ship`，未发现本范围内的实质界面问题，详见 [DIRECT-ANALYSIS-UI-REVIEW.md](C:/Users/10397/Desktop/弹子石智能体_交付包/tmp/rag-customer-parity-20261101/docs/DIRECT-ANALYSIS-UI-REVIEW.md)。文件与文字入队由关闭工作线程的隔离样例验证，不代表真实模型已完成分析；本附记不刷新全局 token、历史记录或其他产品断言。

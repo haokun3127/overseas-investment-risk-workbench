@@ -354,7 +354,7 @@ function registerFormHtml() {
     '<label class="field full">主营业务与产品<textarea name="business" rows="2" maxlength="3000" placeholder="简述在印尼的主营业务、核心产品或项目阶段"></textarea></label>' +
     '<label class="field full">重点关注风险<textarea name="concerns" rows="2" maxlength="3000" placeholder="例如：外籍劳工RPTKA合规、进口模具钢清关、本地化率TKDN要求"></textarea></label>' +
     '</div></fieldset>' +
-    '<label class="check-field auth-rise"><input type="checkbox" name="allow_external"><span>允许已配置的外部 AI 服务在风险分析时使用本公司背景信息。</span></label>' +
+    '' +
     '<div id="auth-error" role="alert"></div>' +
     '<button class="primary auth-submit auth-rise" type="submit">注册并进入工作台</button></form>' +
     '<p class="auth-note auth-rise">登录有效期为8小时；不同企业账号之间资料、任务与风险事件严格隔离。</p>';
@@ -506,7 +506,6 @@ function renderAuthPanel(auth, options = {}) {
       setAuthBusy(form, true, '正在注册…');
       const body = Object.fromEntries(values);
       delete body.confirm;
-      body.allow_external = values.has('allow_external');
       try {
         const res = await api('/auth/register', { method: 'POST', body });
         state.authMode = 'login';
@@ -741,7 +740,7 @@ async function eventDetail(id){
     `<div class="detail-grid"><div><section class="panel">${[['事件摘要',e.summary],['潜在影响',e.impact],['初步应对建议',e.recommendation]].map(([title,text])=>`<section class="detail-section"><h2>${title}</h2><p>${esc(text)}</p></section>`).join('')}</section><section class="panel"><div class="panel-heading"><h2>业务复核</h2>${badge(e.review_status)}</div><form id="review-form" class="panel-content review-form" data-id="${e.id}"><div class="form-grid"><label class="field">复核结论<select name="status">${['pending','accepted','needs_change'].map(v=>`<option value="${v}" ${e.review_status===v?'selected':''}>${statuses[v]}</option>`).join('')}</select></label><label class="field full">复核意见<textarea name="note" rows="3" maxlength="2000" placeholder="记录判断分歧、需要补充的资料或修正建议">${esc(e.review_note)}</textarea></label></div><div class="form-actions"><button class="primary" type="submit">保存复核意见</button><small>${e.reviewed_at?'上次保存 '+when(e.reviewed_at):'尚未记录复核意见'}</small></div><div id="review-error"></div></form></section></div><div><section class="panel"><div class="panel-heading"><h2>判断依据与来源</h2><small>${e.evidence.length} 条引用</small></div>${e.evidence.map((r,i)=>`<article class="evidence"><span class="ref">引用 ${i+1} · ${esc(evidenceLabel(r))}</span><h3>${esc(r.title)}</h3><blockquote>${esc(r.quote)}</blockquote><p>${esc(r.reason)}</p><small>${esc(r.locator)}</small><br>${sourceButton(r.document_id,'定位原文',r.quote)}</article>`).join('')}</section><section class="panel"><div class="panel-heading"><h2>分析记录</h2></div><div class="panel-content"><dl class="definition"><dt>分析版本</dt><dd>v${e.version}</dd><dt>模型</dt><dd>${esc(e.model)}</dd><dt>运行模式</dt><dd>${e.mode==='demo'?'演示数据（未调用模型）':e.mode==='local'?'本地模型':'外部 API'}</dd><dt>规则版本</dt><dd>${esc(e.rules.version)}</dd><dt>分析时间</dt><dd>${when(e.created_at)}</dd><dt>处理耗时</dt><dd>${e.duration_ms?e.duration_ms/1000+' 秒':'—'}</dd></dl><div class="form-actions">${sourceButton(e.document_id,'查看输入资料')}</div></div></section></div></div>`;
 }
 function importForm(knowledge){
-  return `<div class="tabs"><button data-import-mode="file" class="${state.importMode==='file'?'selected':''}">上传文件</button><button data-import-mode="manual" class="${state.importMode==='manual'?'selected':''}">手动录入</button></div><form id="import-form" data-kind="${knowledge?'knowledge':'event'}">${state.importMode==='file'?`<label class="upload-area"><strong>选择需要导入的资料</strong><br><small>Excel / CSV / Word / PDF / TXT / Markdown · 最大10MB</small><br><input type="file" name="file" accept=".csv,.xlsx,.docx,.pdf,.txt,.md" required></label>`:`<div class="form-grid"><label class="field full">标题<input name="title" maxlength="240" required placeholder="输入资料标题"></label><label class="field">资料日期<input type="date" name="date"></label><label class="field">信息来源<input name="source" maxlength="300" placeholder="发布机构或资料出处"></label><label class="field full">原始链接<input name="url" type="url" placeholder="https://"></label><label class="field full">正文<textarea name="body" rows="7" maxlength="60000" required placeholder="粘贴完整正文，保留有助于核验的上下文"></textarea></label></div>`}<label class="check-field"><input type="checkbox" name="allow_external"><span>我确认这份资料允许发送至已配置的外部模型服务。<br>未勾选的资料仅保存和查看，不参与 API 分析。</span></label>${knowledge?'':`<label class="check-field"><input type="checkbox" name="auto_analyze"><span>导入保存后立即在后台启动风险分析（无需在下方二次点击）。</span></label>`}<div class="form-actions"><button class="primary" type="submit">${knowledge?'导入知识库':'导入并分析资料'}</button>${state.importMode==='file'?'<a href="api/template" class="text-button">下载表格模板</a>':''}</div><div id="import-result" aria-live="polite"></div></form>`;
+  return `<div class="tabs"><button data-import-mode="file" class="${state.importMode==='file'?'selected':''}">上传文件</button><button data-import-mode="manual" class="${state.importMode==='manual'?'selected':''}">手动录入</button></div><form id="import-form" data-kind="${knowledge?'knowledge':'event'}">${state.importMode==='file'?`<label class="upload-area"><strong>选择需要导入的资料</strong><br><small>Excel / CSV / Word / PDF / TXT / Markdown · 最大10MB</small><br><input type="file" name="file" accept=".csv,.xlsx,.docx,.pdf,.txt,.md" required></label>`:`<div class="form-grid"><label class="field full">标题<input name="title" maxlength="240" required placeholder="输入资料标题"></label><label class="field">资料日期<input type="date" name="date"></label><label class="field">信息来源<input name="source" maxlength="300" placeholder="发布机构或资料出处"></label><label class="field full">原始链接<input name="url" type="url" placeholder="https://"></label><label class="field full">正文<textarea name="body" rows="7" maxlength="60000" required placeholder="粘贴完整正文，保留有助于核验的上下文"></textarea></label></div>`}<div class="form-actions"><button class="primary" type="submit">${knowledge?'导入知识库':'导入并分析资料'}</button>${state.importMode==='file'?'<a href="api/template" class="text-button">下载表格模板</a>':''}</div><div id="import-result" aria-live="polite"></div></form>`;
 }
 function renderDocAnalysisStatus(d){
   const st=['queued','running','failed'].includes(d.job_status)?d.job_status:(d.decision||d.job_status);
@@ -776,28 +775,29 @@ function quarantineTag(d) {
   return d.quarantined_at ? `<span class="badge quarantine-tag" title="${esc(d.quarantine_reason || '待核实')}">已隔离</span>` : '';
 }
 async function documents(knowledge){
+  // This retired list filter must not keep silently filtering bookmarked URLs.
+  delete state.filter.policy;
   const kind=knowledge?'knowledge':'event';
   const data=await api('/documents?'+new URLSearchParams({...state.filter,kind,page:state.page}));
   const rows=data.items.map(d=>{
     const summary=d.zh_state==='done'
       ? `<div class="zh-summary-clamp">${esc(d.zh_summary)}</div>${d.zh_keywords?`<div class="zh-kw-line"><strong>关键词：</strong>${esc(d.zh_keywords)}</div>`:''}<button type="button" class="text-button" data-zh-expand>展开</button>`
-      : `<span class="zh-state">${d.demo?'演示资料不生成摘要':!d.allow_external?'未授权 AI，不生成摘要':d.zh_state==='failed'?'摘要生成失败':'摘要生成中'}</span>`;
+      : `<span class="zh-state">${d.demo?'演示资料不生成摘要':d.zh_state==='failed'?'摘要生成失败':'摘要待生成'}</span>`;
     const actions=knowledge
       ? `${sourceButton(d.id,'查看详细')}${docDeleteHtml(d,true)}`
       : `${sourceButton(d.id,d.decision?'查看详细与结果':'查看详细')}<span data-job-actions>${docJobActionsHtml(d)}</span>${docDeleteHtml(d,false)}`;
     return `<tr data-doc-id="${d.id}">
       ${knowledge?'':`<td>${docSelectHtml(d)}</td>`}
-      <td class="title-cell">${esc(d.title)}${demoTag(d.demo)}${quarantineTag(d)}${knowledge && !d.allow_external ? '<span class="web-tag muted">未授权 AI 使用</span>' : ''}<span class="source-line">${esc(d.kind_label||'')}${d.kind_label?' · ':''}${esc(d.source||'来源未填写')}</span></td>
+      <td class="title-cell">${esc(d.title)}${demoTag(d.demo)}${quarantineTag(d)}<span class="source-line">${esc(d.kind_label||'')}${d.kind_label?' · ':''}${esc(d.source||'来源未填写')}</span></td>
       <td class="date-cell">${dateStamp(d)}</td>
       <td class="${knowledge?'zh-cell':''}" ${knowledge?'':`data-progress-cell`}>${knowledge?summary:docProgressCellHtml(d)}</td>
-      ${knowledge ? '' : `<td class="nowrap">${d.allow_external?'允许外部分析':'未授权 AI 使用'}</td>`}
       <td><div class="document-actions">${actions}</div></td>
     </tr>`;
   }).join('');
   return heading(knowledge?'知识库':'资料与分析',knowledge?'保存政策、案例与业务资料，为风险分析提供可追溯的参考依据。':'上传或录入待研判资料，一键结合企业背景与知识库法规完成风险分析。')+
-    `<div class="split"><section class="panel"><div class="panel-heading"><h2>${knowledge?'添加参考资料':'导入并分析资料'}</h2></div><div class="panel-content">${importForm(knowledge)}</div></section><section class="panel"><div class="panel-heading"><h2>${knowledge?'检索与使用说明':'导入与分析说明'}</h2></div><div class="panel-content form-note">${knowledge?'<p>已授权的资料入库后，由已配置的模型自动生成中文摘要和中文关键词，外文法规也可以用中文检索。检索在服务端完成，结果都能追溯原文。</p><p>风险分析只使用已授权的参考资料，引用的是原文片段，并随分析版本保存。</p>':'<ul><li>上传或录入时勾选“立即启动风险分析”，保存后自动进入后台分析并实时刷新进度。</li><li>分析时自动挂载贵司档案背景与知识库中最相关的印尼法规原文。</li><li>每条记录至少包含标题和正文；单条最多60000字符。</li><li>下方列表可直接查看分段分析进度、失败原因、取消排队或重新分析。</li></ul>'}<p>模型状态：<strong>${modelStatusText()}</strong><br>分类规则：${state.config.rules.confirmed?'已确认':'待甲方确认'}</p><a href="#settings">查看模型与规则设置</a></div></section></div>`+
+    `<div class="split"><section class="panel"><div class="panel-heading"><h2>${knowledge?'添加参考资料':'导入并分析资料'}</h2></div><div class="panel-content">${importForm(knowledge)}</div></section><section class="panel"><div class="panel-heading"><h2>${knowledge?'检索与使用说明':'导入与分析说明'}</h2></div><div class="panel-content form-note">${knowledge?'<p>资料入库后，由已配置的模型自动生成中文摘要和中文关键词，外文法规也可以用中文检索。检索在服务端完成，结果都能追溯原文。</p><p>风险分析使用当前公司及公共知识库中相关的参考资料，引用的是原文片段，并随分析版本保存。</p>':'<ul><li>上传或录入后自动进入后台风险分析，并实时刷新进度。</li><li>分析时自动挂载贵司档案背景与知识库中最相关的印尼法规原文。</li><li>每条记录至少包含标题和正文；单条最多60000字符。</li><li>下方列表可直接查看分段分析进度、失败原因、取消排队或重新分析。</li></ul>'}<p>模型状态：<strong>${modelStatusText()}</strong><br>分类规则：${state.config.rules.confirmed?'已确认':'待甲方确认'}</p><a href="#settings">查看模型与规则设置</a></div></section></div>`+
     (knowledge?'<section class="panel knowledge-search-panel"><div class="panel-heading"><h2>知识库检索</h2><small>中文、印尼文和英文关键词均可</small></div><form id="knowledge-search" class="knowledge-search-bar"><label class="field">内容检索<input name="q" value="'+esc(state.kq||'')+'" required placeholder="检索资料标题、摘要和正文"></label><button class="primary small" type="submit">检索内容</button></form><section id="knowledge-results" class="kr" aria-live="polite"></section></section>':'')+
-    `<section class="panel"><div class="panel-heading"><h2>${knowledge?'参考资料':'资料与分析任务列表'} <small>${data.total} 条</small></h2>${knowledge?'':'<div class="actions"><button class="secondary small" data-refresh>刷新进度</button><button class="primary small" id="analyze-selected">分析所选资料</button></div>'}</div><form class="filters" id="document-filter"><label class="search-field">搜索资料<input name="q" value="${esc(state.filter.q||'')}" placeholder="按标题搜索"></label><button class="secondary small">查询</button></form><p id="list-stale" hidden>列表有新增或删除，<button type="button" class="text-button" data-refresh>点击刷新</button></p>${data.items.length?`<div class="table-wrap"><table><thead><tr>${knowledge?'':'<th><input type="checkbox" id="select-all" aria-label="选择当前页可分析资料"></th>'}<th>资料标题</th><th>日期（来源）</th><th>${knowledge?'中文摘要':'分析进度与结论'}</th>${knowledge?'':'<th>数据范围</th>'}<th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>`:empty(knowledge?'知识库还没有资料':'暂无待分析资料',knowledge?'导入甲方提供的政策法规或案例后，可以先检索检查内容。':'在上方上传文件或手动录入，勾选自动分析即可一键产出风险预警。')}${pagination(data)}</section>`;
+    `<section class="panel"><div class="panel-heading"><h2>${knowledge?'参考资料':'资料与分析任务列表'} <small>${data.total} 条</small></h2>${knowledge?'':'<div class="actions"><button class="secondary small" data-refresh>刷新进度</button><button class="primary small" id="analyze-selected">分析所选资料</button></div>'}</div><form class="filters" id="document-filter"><label class="search-field">搜索资料<input name="q" value="${esc(state.filter.q||'')}" placeholder="按标题搜索"></label><button class="secondary small">查询</button></form><p id="list-stale" hidden>列表有新增或删除，<button type="button" class="text-button" data-refresh>点击刷新</button></p>${data.items.length?`<div class="table-wrap"><table><thead><tr>${knowledge?'':'<th><input type="checkbox" id="select-all" aria-label="选择当前页可分析资料"></th>'}<th>资料标题</th><th>日期（来源）</th><th>${knowledge?'中文摘要':'分析进度与结论'}</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>`:empty(knowledge?'知识库还没有资料':'暂无待分析资料',knowledge?'导入甲方提供的政策法规或案例后，可以先检索检查内容。':'在上方上传文件或手动录入，保存后自动启动风险分析。')}${pagination(data)}</section>`;
 }
 function docJobActionsHtml(d){
   if(d.demo||d.quarantined_at)return '';
@@ -812,7 +812,7 @@ async function jobs(){
 }
 async function settings(){
   state.config=await api('/settings');const c=state.config;
-  return heading('模型与规则','通过外部模型 API 完成风险分析和网站相关性筛选。')+`<div class="settings-grid"><section class="panel"><div class="panel-heading"><h2>模型连接</h2><span class="status-chip">${c.configured?'已填写配置':'等待配置'}</span></div><div class="panel-content"><dl class="definition"><dt>运行模式</dt><dd>${'外部 API'}</dd><dt>模型名称</dt><dd>${esc(c.model||'未设置')}</dd><dt>服务地址</dt><dd>${esc(c.base_url||'未设置')}</dd><dt>推理强度</dt><dd>${esc(c.reasoning_effort||'模型默认')}</dd><dt>接口协议</dt><dd>${c.wire_api==='responses'?'Responses':'Chat Completions'}</dd><dt>响应存储</dt><dd>${c.store_responses?'开启':'关闭'}</dd><dt>知识库检索</dt><dd>${esc(c.retrieval)}</dd></dl><h3>API 使用说明</h3><p class="form-note">模型连接由服务端统一配置，API 密钥不会返回浏览器。支持 Responses 与 Chat Completions 协议，可设置推理强度和响应存储。</p><p class="form-note">风险分析发送已授权的正文、相关知识片段及公司背景；网站检索发送已授权的公开网页正文。未授权资料只保存和查看。</p><p class="form-note">连接异常时任务会提示失败，可在恢复后重试。配置已填写不代表实时连接正常，请使用连接检查验证。</p></div></section><section class="panel"><div class="panel-heading"><h2>风险分类分级规则</h2><span class="status-chip">${c.rules.confirmed?'已保存':'待确认'}</span></div><form class="panel-content" id="rules-form"><p class="form-note">可根据公司经营情况修改分类、等级定义和版本，再勾选确认。历史分析保留当时使用的规则。</p><label class="field">规则内容（JSON）<textarea name="rules" class="rules-editor" spellcheck="false">${esc(JSON.stringify(c.rules,null,2))}</textarea></label><label class="check-field"><input type="checkbox" name="confirmed" ${c.rules.confirmed?'checked':''}><span>我确认这份规则适用于当前分析用途。</span></label><button class="primary" type="submit">保存规则</button><div id="rules-error"></div></form></section></div>`;
+  return heading('模型与规则','通过外部模型 API 完成风险分析和网站相关性筛选。')+`<div class="settings-grid"><section class="panel"><div class="panel-heading"><h2>模型连接</h2><span class="status-chip">${c.configured?'已填写配置':'等待配置'}</span></div><div class="panel-content"><dl class="definition"><dt>运行模式</dt><dd>${'外部 API'}</dd><dt>模型名称</dt><dd>${esc(c.model||'未设置')}</dd><dt>服务地址</dt><dd>${esc(c.base_url||'未设置')}</dd><dt>推理强度</dt><dd>${esc(c.reasoning_effort||'模型默认')}</dd><dt>接口协议</dt><dd>${c.wire_api==='responses'?'Responses':'Chat Completions'}</dd><dt>响应存储</dt><dd>${c.store_responses?'开启':'关闭'}</dd><dt>知识库检索</dt><dd>${esc(c.retrieval)}</dd></dl><h3>API 使用说明</h3><p class="form-note">模型连接由服务端统一配置，API 密钥不会返回浏览器。支持 Responses 与 Chat Completions 协议，可设置推理强度和响应存储。</p><p class="form-note">资料录入后即可用于模型分析；风险分析结合正文、相关知识片段和公司背景，网站检索按配置筛选公开网页。</p><p class="form-note">连接异常时任务会提示失败，可在恢复后重试。配置已填写不代表实时连接正常，请使用连接检查验证。</p></div></section><section class="panel"><div class="panel-heading"><h2>风险分类分级规则</h2><span class="status-chip">${c.rules.confirmed?'已保存':'待确认'}</span></div><form class="panel-content" id="rules-form"><p class="form-note">可根据公司经营情况修改分类、等级定义和版本，再勾选确认。历史分析保留当时使用的规则。</p><label class="field">规则内容（JSON）<textarea name="rules" class="rules-editor" spellcheck="false">${esc(JSON.stringify(c.rules,null,2))}</textarea></label><label class="check-field"><input type="checkbox" name="confirmed" ${c.rules.confirmed?'checked':''}><span>我确认这份规则适用于当前分析用途。</span></label><button class="primary" type="submit">保存规则</button><div id="rules-error"></div></form></section></div>`;
 }
 function sourceDateRows(d) {
   const rows = [['资料日期（来源）', esc(dateLabel(d))]];
@@ -851,7 +851,7 @@ async function showSource(id, quote = '') {
       : '<p class="notice-inline" role="note">原文已变化，未能定位该引用片段，请人工核对。</p>';
     const kwHtml = d.zh_keywords ? d.zh_keywords.split(/[、,，;；]+/).filter(Boolean).map((k) => `<span class="kw-chip">${esc(k.trim())}</span>`).join('') : '';
     const zhBlock = (d.zh_summary || d.zh_keywords) ? `<section class="detail-zh-card"><h3>中文摘要与检索关键词 <small>AI 生成，仅作检索辅助</small></h3>${d.zh_summary ? `<p class="detail-zh-summary">${esc(d.zh_summary)}</p>` : ''}${kwHtml ? `<div class="detail-zh-keywords">${kwHtml}</div>` : ''}</section>` : '';
-    const metaGrid = `<dl class="detail-meta-grid"><div><dt>资料编号</dt><dd>#${d.id}（${d.kind === 'knowledge' ? '知识库法规/参考资料' : d.kind === 'supplement' ? '关联补充材料' : '待分析业务资料'}${d.kind_label ? ` · ${esc(d.kind_label)}` : ''}）</dd></div>${sourceDateRows(d)}<div><dt>信息来源</dt><dd>${esc(d.source || '未填写')}</dd></div><div><dt>正文规模</dt><dd>${(d.body?.length || 0).toLocaleString('zh-CN')} 字符 · 共 ${d.chunks?.length || 1} 个检索分段</dd></div><div><dt>外部 AI 授权</dt><dd>${d.allow_external ? '已授权外部 AI 使用' : '仅本地保存'}</dd></div></dl>`;
+    const metaGrid = `<dl class="detail-meta-grid"><div><dt>资料编号</dt><dd>#${d.id}（${d.kind === 'knowledge' ? '知识库法规/参考资料' : d.kind === 'supplement' ? '关联补充材料' : '待分析业务资料'}${d.kind_label ? ` · ${esc(d.kind_label)}` : ''}）</dd></div>${sourceDateRows(d)}<div><dt>信息来源</dt><dd>${esc(d.source || '未填写')}</dd></div><div><dt>正文规模</dt><dd>${(d.body?.length || 0).toLocaleString('zh-CN')} 字符 · 共 ${d.chunks?.length || 1} 个检索分段</dd></div></dl>`;
     const quarantine = d.quarantined_at ? `<div class="notice-inline" role="note">资料已隔离（待核实），不计入统计、列表和简报，也不能进入分析。原因：${esc(d.quarantine_reason || '未填写')}</div>` : '';
     const analyses = d.kind === 'event' || d.analyses?.length
       ? `<h3>分析记录</h3>${d.analyses.length ? d.analyses.map((a) => `<p class="form-note">v${a.version} · ${badge(a.decision)} · ${esc(a.model)} · ${when(a.created_at)} · 规则 ${esc(a.rule_version)}${a.result.rules_snapshot_origin==='upgrade'?'（升级时固定）':''}${a.result.supplement_document_ids?.length?` · 补证材料 ${a.result.supplement_document_ids.map(id=>'#'+id).join('、')}`:''}${a.decision==='insufficient'?` · <a href="#evidence/${a.id}" data-history>进入补证</a>`:''}<br>${esc(a.result.reason || a.result.parts?.map((p) => p.reason).join('；') || '查看风险列表中的分析结果。')}</p>`).join('') : '<p class="muted">尚无分析记录。</p>'}`
@@ -865,23 +865,6 @@ async function showSource(id, quote = '') {
       $$('[data-history]', dialog).forEach((a) => {
         a.onclick = () => dialog.close();
       });
-    }
-    if (d.editable && !d.demo && !d.quarantined_at) {
-      $('#source-content').insertAdjacentHTML('beforeend', `<form class="policy-form" id="policy-form"><h3>资料使用范围</h3><label class="check-field"><input type="checkbox" name="allow_external" ${d.allow_external ? 'checked' : ''}><span>我确认此资料允许发送至已配置的外部模型服务。取消勾选后，此资料不再参与后续 API 分析。</span></label><button class="secondary small" type="submit">保存使用范围</button><div id="policy-error"></div></form>`);
-      $('#policy-form').onsubmit = async (event) => {
-        event.preventDefault();
-        const button = $('button', event.currentTarget);
-        button.disabled = true;
-        try {
-          await api(`/documents/${d.id}/policy`, { method: 'PATCH', body: { allow_external: new FormData(event.currentTarget).has('allow_external') } });
-          toast('资料使用范围已更新');
-          await render({ quiet: true });
-        } catch (e) {
-          $('#policy-error').innerHTML = errorBox(e.message);
-        } finally {
-          button.disabled = false;
-        }
-      };
     }
     $('#jump-quote')?.addEventListener('click', () => $('#source-quote')?.scrollIntoView({ block: 'start' }));
     dialog.scrollTop = 0;
@@ -928,23 +911,23 @@ function bind(){
     e.preventDefault();const form=e.currentTarget;const values=new FormData(form);const button=$('[type=submit]',form);button.disabled=true;$('#import-result').innerHTML='';
     try{
       let message;
-      const autoAnalyze=form.dataset.kind==='event'&&values.has('auto_analyze')&&values.has('allow_external');
+      const autoAnalyze=form.dataset.kind==='event';
       let analyzeIds=[];
       if(state.importMode==='file'){
-        values.set('kind',form.dataset.kind);values.set('allow_external',values.has('allow_external')?'true':'false');
+        values.set('kind',form.dataset.kind);
         const result=await api('/import',{method:'POST',body:values});
         const failed=result.results.filter(r=>r.status==='failed');const dup=result.results.filter(r=>r.status==='duplicate');
         analyzeIds=result.results.filter(r=>r.id&&r.status!=='failed').map(r=>r.id);
         message=`导入完成：新增 ${result.created} 条，重复 ${dup.length} 条，失败 ${failed.length} 条。`;
         sessionStorage.setItem('importFeedback',JSON.stringify({route:state.route,message,failed}));
       }else{
-        const record=Object.fromEntries(values);delete record.auto_analyze;record.kind=form.dataset.kind;record.allow_external=values.has('allow_external');
+        const record=Object.fromEntries(values);delete record.auto_analyze;record.kind=form.dataset.kind;
         const result=await api('/documents',{method:'POST',body:record});
         if(result.id)analyzeIds=[result.id];
         message=result.created?'资料已保存。':'资料已存在，没有重复导入。';
         sessionStorage.setItem('importFeedback',JSON.stringify({route:state.route,message,failed:[]}));
       }
-      if(autoAnalyze&&analyzeIds.length&&state.config?.configured&&state.config?.rules?.confirmed){
+      if(autoAnalyze&&analyzeIds.length){
         try{
           await api('/jobs',{method:'POST',body:{document_ids:analyzeIds}});
           message+=' 已自动加入后台风险分析队列。';

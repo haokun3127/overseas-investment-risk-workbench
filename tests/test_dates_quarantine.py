@@ -264,7 +264,7 @@ def test_quarantine_dry_run_mismatch_and_apply(client, monkeypatch, tmp_path):
     opened = client.get(f'/api/events/{event}')
     assert opened.status_code == 200 and opened.json()['quarantined_at']
     assert client.delete(f'/api/documents/{doc}').status_code == 409
-    assert client.patch(f'/api/documents/{doc}/policy', json={'allow_external': True}).status_code == 409
+    assert client.patch(f'/api/documents/{doc}/policy', json={'allow_external': True}).status_code == 404
     listed = {r['id']: r for r in client.get('/api/documents?kind=event').json()['items']}
     assert listed[doc]['quarantined_at'] and keep_doc in listed
 

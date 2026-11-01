@@ -28,18 +28,19 @@ def test_chinese_summary_makes_foreign_documents_searchable_in_chinese(client,mo
     law=add(store,'Permenaker Nomor 5 Tahun 2025',LAW)
     secret=add(store,'Dokumen internal',LAW,allow=False)
     async def fake(settings,payload,system=None):
-        assert system==enrich.SUMMARY_SYSTEM and payload['title']=='Permenaker Nomor 5 Tahun 2025'
+        assert system==enrich.SUMMARY_SYSTEM and payload['title'] in ('Permenaker Nomor 5 Tahun 2025','Dokumen internal')
         return {'summary':'印尼劳工部2025年第5号部长条例，规定向劳动者发放工资补贴。','keywords':['外籍劳工','工资补贴','劳工部']},{}
     monkeypatch.setattr(enrich.model,'call_model',fake)
     assert not retrieve(store,'工资补贴')
     assert asyncio.run(client.app.state.enricher.run_once()) is True
-    assert asyncio.run(client.app.state.enricher.run_once()) is False  # the unauthorised document is never sent
-    assert store.one('SELECT zh_state FROM documents WHERE id=?',(secret,))['zh_state']==''
+    assert asyncio.run(client.app.state.enricher.run_once()) is True
+    assert asyncio.run(client.app.state.enricher.run_once()) is False
+    assert store.one('SELECT zh_state FROM documents WHERE id=?',(secret,))['zh_state']=='done'
     items=client.get('/api/knowledge/search?q=工资补贴').json()['items']
-    assert [i['document_id'] for i in items]==[law]  # one hit per document, with its summary
+    assert {i['document_id'] for i in items}=={law,secret}  # both records are usable without an authorization toggle
     assert items[0]['zh_summary'].startswith('印尼劳工部') and items[0]['text'] in LAW
     hits=retrieve(store,'工资补贴',limit=4)
-    assert hits and all(h['document_id']==law and 'zh_summary' not in h for h in hits)  # analysis gets original text only
+    assert hits and all(h['document_id'] in (law,secret) and 'zh_summary' not in h for h in hits)  # analysis gets original text only
 
 def test_synonym_and_foreign_body_still_find_the_document(client):
     store=client.app.state.store
