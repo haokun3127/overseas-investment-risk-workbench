@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 from . import model
+from .profile_fields import LABELS as COMPANY_FIELDS
 from .indicators import INDICATORS
 from .retrieval import retrieve
 from .store import now
@@ -17,6 +18,12 @@ UNSENT_RATIO = 0.3
 def _mostly_unsent(coverage):
     unsent = coverage['total_chunks'] - coverage['sent_chunks']
     return unsent >= UNSENT_MIN and unsent >= coverage['total_chunks'] * UNSENT_RATIO
+
+
+def _company_context(context):
+    """Keep supplied business context in every path; omit internal IDs and permissions."""
+    return {key: context[key] for key in COMPANY_FIELDS
+            if isinstance(context.get(key), str) and context[key].strip()}
 
 
 class Worker:
@@ -159,7 +166,7 @@ class Worker:
         hits = retrieve(self.store, query, external=external, company_id=job_company_id, per_document=True, limit=4)
         # References carry the original chunk text, which is what quotes are validated against.
         references, knowledge = self._references(doc, sources, supplements, hits)
-        brief = {key: context.get(key) for key in ('name', 'industry', 'location', 'stage', 'business', 'concerns') if context.get(key)}
+        brief = _company_context(context)
         payload = {'scope': {'country': '印度尼西亚', 'industry': context.get('industry') or '未指定行业'},
             'rules': narrowed,
             'document': {'title': doc['title'], 'date': doc['date'], 'source': doc['source']},
@@ -205,7 +212,7 @@ class Worker:
             knowledge.update(found)
             payload = {'scope': {'country': '印度尼西亚', 'industry': context.get('industry') or '未指定行业'}, 'rules': rules,
                 'document': {'title': doc['title'], 'date': doc['date'], 'source': doc['source']},
-                'company': context,
+                'company': _company_context(context),
                 'part': f'{index + 1}/{len(chunks)}', 'references': [{'reference': key, **value} for key, value in references.items()]}
             result, used = await model.call_validated(self.settings, payload, references, rules)
             results.append(result)

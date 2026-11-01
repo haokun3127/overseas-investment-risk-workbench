@@ -26,6 +26,9 @@ SHARED_OWNER = -1
 KNN_MAX = 4096
 RRF_K = 60
 WINDOWS_PER_CHUNK = 3
+# Keep the normal worker at the same conservative batch size as the bounded replay.
+EMBED_BATCH_SIZE = 2
+INDEX_BATCH_SIZE = 2
 
 
 class ModelSpec(NamedTuple):
@@ -119,7 +122,7 @@ def embed(store, texts, kind='passage'):
         spec = active_spec()
         prefix = spec.query_prefix if kind == 'query' else spec.passage_prefix
         clipped = [prefix + ' '.join((text or '').split())[:spec.max_chars] for text in texts]
-        return [[float(value) for value in vector] for vector in model.embed(clipped, batch_size=16)]
+        return [[float(value) for value in vector] for vector in model.embed(clipped, batch_size=EMBED_BATCH_SIZE)]
 
 
 def passage(title, keywords, text):
@@ -232,7 +235,7 @@ def _prune(conn, store):
     conn.commit()
 
 
-def index_once(store, batch=16):
+def index_once(store, batch=INDEX_BATCH_SIZE):
     """Embed one batch of indicators or not-yet-indexed knowledge chunks. False when caught up or unavailable."""
     try:
         current = dict(indicator_texts())

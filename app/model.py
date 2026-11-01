@@ -14,7 +14,7 @@ def loopback_proxy(value):
         raise ValueError('MODEL_PROXY 只能是本机 HTTP 代理，例如 http://127.0.0.1:7890')
     return value
 
-PROMPT_VERSION = 'risk-evidence-v9-canonical-citations'
+PROMPT_VERSION = 'risk-evidence-v11-company-context'
 UNMAPPED_CATEGORY = '对不上'
 SYSTEM = '''你是海外投资风险分析助手，范围是企业在印度尼西亚投资与经营，行业以 scope 和 company 为准。
 公司档案仅作为业务背景，不把企业描述本身当作风险事件证据。根据其地区、行业、阶段与供应链说明事件对该公司的适用性；缺少档案则说明适用性待核实。

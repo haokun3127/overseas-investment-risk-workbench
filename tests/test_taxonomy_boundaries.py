@@ -58,8 +58,11 @@ def test_vector_group_preparation_retains_all_allowed_categories(monkeypatch):
         queries.append(query)
         return []
     monkeypatch.setattr(jobs,'retrieve',fake_retrieve)
+    context={'industry':'合成行业','location':'印尼','investment':'投资额未提供',
+        'entity':'子公司承担许可责任','workforce':'用工人数待核实','supply_chain':'本地采购',
+        'licenses':'许可证仍有效','notes':'事件为历史时点','id':1,'allow_external':True,'updated_at':'2026-01-01'}
     prepared=Worker(None,None)._prepare_grouped({'id':4,'title':'合成资料','date':'','source':'合成'},
-        [chunk],copy.deepcopy(DEFAULT_RULES),{'industry':'合成行业','location':'印尼'},[],True,1)
+        [chunk],copy.deepcopy(DEFAULT_RULES),context,[],True,1)
     payload,refs,knowledge,coverage=prepared
     assert payload['rules']['categories']==DEFAULT_RULES['categories']
     assert coverage['categories']==chosen
@@ -67,6 +70,7 @@ def test_vector_group_preparation_retains_all_allowed_categories(monkeypatch):
     assert coverage['allowed_category_count']==len(DEFAULT_RULES['categories'])
     assert queries[0].startswith(' '.join(chosen))
     assert refs['S8']['document_id']==4
+    assert payload['company']=={k:v for k,v in context.items() if k not in ('id','allow_external','updated_at')}
 
 
 def test_distinct_indicators_survive_same_title_and_quote(client, monkeypatch):
