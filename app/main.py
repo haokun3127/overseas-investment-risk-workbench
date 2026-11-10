@@ -160,7 +160,7 @@ def create_app(settings=None, run_worker=True):
 
     @app.get('/api/release')
     def release():
-        return JSONResponse({'version':'20261109-consultation'},headers={'Cache-Control':'no-store'})
+        return JSONResponse({'version':'20261111-workbench-verified'},headers={'Cache-Control':'no-store'})
 
     @app.get('/api/health')
     def health(): return {'status':'ok'}

@@ -31,6 +31,7 @@ from . import updates
 from .publication import find_publication_date, from_html, from_text, from_snapshot, from_disclosure_url
 from .reference_copy import read_reference_copy
 from .archive_copy import read_archive_copy
+from .retained_pdf import read_retained_pdf
 
 AGENT = 'RiskWorkbenchBot'
 USER_AGENT = 'RiskWorkbenchBot/1.1'
@@ -1195,6 +1196,11 @@ class Collector:
                 delay=max(1,robots.crawl_delay() or 1)
                 if delay>30: raise ValueError('网站要求较长采集间隔，请联系站点管理员后调整采集方式。')
                 await asyncio.sleep(delay)
+            if not pages and not connector and not review_only and robots.can_fetch(base):
+                retained = await asyncio.to_thread(read_retained_pdf, store.directory, base)
+                if retained and self.keep(run_id,pages,base,retained['title'],retained['body'],retained['date'],retained['raw'],'application/pdf',method='original_copy'):
+                    with store.db() as db:
+                        db.execute("UPDATE web_pages SET fetched_at=?,date_source=? WHERE id=?", (retained['retrieved_at'],retained['date_source'],pages[-1]['id']))
             if not pages and not connector and not review_only and robots.can_fetch(base):
                 retained = await asyncio.to_thread(read_reference_copy, store.directory, base)
                 if retained and self.keep(run_id,pages,base,retained['title'],retained['body'],retained['date'],retained['raw'],'text/plain',method='reader_copy'):
