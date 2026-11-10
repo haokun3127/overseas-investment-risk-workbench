@@ -155,7 +155,9 @@ def test_redirect_and_size_limits(monkeypatch):
     Response.status=200
     Response.getheader=lambda self,name,default=None: 'text/html' if name=='Content-Type' else default
     Response.read=lambda self,size:b'x'*min(size,websearch.MAX_BYTES+1)
-    assert len(websearch.fetch_page('https://source.example/news/','https://source.example/news/')[2])==websearch.MAX_BYTES
+    assert len(websearch.fetch_page('https://source.example/news/','https://source.example/news/')[2])==websearch.MAX_BYTES+1
+    with pytest.raises(ValueError,match='采集限制'):
+        websearch.fetch_page('https://source.example/news/','https://source.example/news/',limit=100)
 
 def test_scheduler_runs_due_source_and_recovers_interrupted_run(web_client,monkeypatch):
     c=web_client;sid=add_source(c,interval_hours=24)

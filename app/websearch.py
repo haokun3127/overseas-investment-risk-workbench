@@ -40,6 +40,7 @@ PROXY_ONLY_HOSTS = ('archive.org', 'web.archive.org')  # blocked from mainland C
 PUBLIC_DNS_HOSTS = ('newsroom.tiktok.com', 'www.thejakartapost.com')
 PUBLIC_DNS_CACHE = {}
 MAX_BYTES = 1024 * 1024
+MAX_HTML_BYTES = 24 * 1024 * 1024
 MAX_PDF_BYTES = 32 * 1024 * 1024
 MAX_BODY = 60000
 TRUNCATED = '\n\n［正文过长，以下内容已截断］'
@@ -281,7 +282,10 @@ def fetch_page(url,base,robots=None,relaxed=False,limit=MAX_BYTES):
                 return url,pdf_text(raw),raw,'application/pdf'
             if not relaxed and not any(t in kind for t in ('text/html','text/plain','application/xhtml+xml')):
                 raise ValueError('当前仅采集 HTML、文本或 PDF 页面。')
-            raw=read_body(r,limit)  # longer pages are truncated, not rejected
+            page_limit=MAX_HTML_BYTES if not relaxed and limit==MAX_BYTES else limit
+            raw=read_body(r,page_limit+1)
+            if len(raw)>page_limit:
+                raise ValueError(f'网页超过{page_limit//(1024*1024)}MB采集限制，请按章节下载后导入。')
             charset=re.search(r'charset\s*=\s*["\']?([\w-]+)',content_type,re.I)
             if not charset: charset=re.search(br'charset\s*=\s*["\']?([\w-]+)',raw[:4096],re.I)
             encoding=charset.group(1) if charset else 'utf-8'
@@ -411,6 +415,25 @@ def review_window(body,keywords,size=6000):
         score=(sum(n>0 for n in counts),sum(min(n,3)/(1+len(matches)) for n,matches in zip(counts,occurrences)))
         if score>best: best,start=score,offset
     return body[start:start+size]
+
+
+def retained_body(body, keywords):
+    """Keep a bounded contiguous original span containing the strongest topic window.
+
+    A long filing's later risk sections must not disappear before relevance review.
+    The downloaded raw attachment is kept separately; this text is explicitly an excerpt.
+    """
+    if len(body) <= MAX_BODY:
+        return body
+    focus = review_window(body, keywords) if keywords.strip() else body[:6000]
+    width = MAX_BODY - 100
+    start = max(0, min(body.find(focus) - (width-len(focus))//2, len(body)-width))
+    start = (start//1000)*1000
+    if start == 0:
+        return body[:MAX_BODY-len(TRUNCATED)] + TRUNCATED
+    end = min(len(body), start+width)
+    note = f'\n\n［长文节选：原文字符{start+1}–{end}，全文共{len(body)}字符；其余内容请查阅原始附件］'
+    return body[start:end] + note
 
 def xml_text(value):
     return html_text(re.sub(r'<!\[CDATA\[(.*?)\]\]>',lambda m:m.group(1),value or '',flags=re.S))
@@ -1041,7 +1064,10 @@ class Collector:
         if not date and not found:
             found, provenance, _ = from_disclosure_url(url)
         date = date or found
-        if len(body)>MAX_BODY: body=body[:MAX_BODY-len(TRUNCATED)]+TRUNCATED
+        if len(body)>MAX_BODY:
+            config=self.store.one('SELECT config_json FROM web_runs WHERE id=?',(run_id,))
+            keywords=json.loads(config['config_json']).get('keywords','') if config else ''
+            body=retained_body(body,keywords)
         digest=hashlib.sha256(body.encode()).hexdigest()
         if any(p['digest']==digest for p in pages): return False
         # Snapshot is immutable and downloaded only as an attachment, never executed.
