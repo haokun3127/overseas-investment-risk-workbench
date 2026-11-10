@@ -2,15 +2,16 @@ import math
 import re
 from collections import Counter
 from urllib.parse import urlsplit
+from .vectors import fuse_hits
 
 _STOP_SPLIT = re.compile(r"[的了和与及或在对于向从以由把被让给并而但且或及]")
 
 _CROSS_LINGUAL_MAP = {
     "外籍": ("tka", "rptka", "dkptka", "asing", "tenaga", "kemnaker", "permenaker"),
-    "劳工": ("ketenagakerjaan", "pekerja", "buruh", "tenaga", "kemnaker", "permenaker", "tka", "rptka", "labor", "labour"),
+    "劳工": ("ketenagakerjaan", "pekerja", "pekerjaan", "buruh", "tenaga", "kemnaker", "permenaker", "tka", "rptka", "labor", "labour"),
     "劳动": ("ketenagakerjaan", "pekerja", "buruh", "tenaga", "kemnaker", "permenaker", "kerja"),
     "用工": ("ketenagakerjaan", "pekerja", "tenaga", "kerja", "tka", "rptka"),
-    "工资": ("upah", "ump", "umk", "minimum", "pengupahan", "subsidi", "gaji", "wage"),
+    "工资": ("upah", "ump", "umk", "umr", "minimum", "pengupahan", "subsidi", "gaji", "wage"),
     "解雇": ("phk", "pemutusan", "hubungan", "pesangon"),
     "裁员": ("phk", "pemutusan", "hubungan", "pesangon"),
     "罢工": ("mogok", "serikat", "pekerja"),
@@ -43,6 +44,19 @@ _CROSS_LINGUAL_MAP = {
     "外汇": ("devisa", "dhe", "sda", "rupiah", "bank", "indonesia", "pbi"),
 }
 
+# Chinese queries often use a near-synonym that never appears in the foreign text or its summary.
+_SYNONYM_OF = {
+    "薪酬": "工资",
+    "薪资": "工资",
+    "报酬": "工资",
+    "工钱": "工资",
+    "执照": "许可",
+    "营业执照": "许可",
+}
+_FUNCTION_ZH = {"怎么", "哪些", "是否", "规定", "要求", "法律", "什么", "如何", "可以", "进行", "关于", "以及"}
+_LATIN_STOP = {"dan", "yang", "untuk", "dari", "dengan", "atau", "pada", "dalam", "akan", "tidak", "ini", "itu", "the", "and", "for"}
+_SPECIFIC = {term for values in _CROSS_LINGUAL_MAP.values() for term in values if len(term) >= 3}
+
 def tokens(text, expand=False):
     words = re.findall(r"[a-z0-9]{2,}", text.lower())
     for phrase in re.findall(r"[\u4e00-\u9fff]+", text):
@@ -61,13 +75,31 @@ def tokens(text, expand=False):
         words.extend(extra)
     return words
 
+def _core_count(terms):
+    count = 0
+    for term in terms:
+        if term in _FUNCTION_ZH or term in _LATIN_STOP:
+            continue
+        if re.fullmatch(r"[a-z0-9]{2,}", term) or term in _CROSS_LINGUAL_MAP or term in _SYNONYM_OF:
+            count += 1
+    return count
+
 def _concept_groups(query, allow_expand=True):
     raw = list(dict.fromkeys(tokens(query, expand=False)))
     groups = []
-    for t in raw:
-        syns = (t,) + (_CROSS_LINGUAL_MAP.get(t, ()) if allow_expand else ())
-        groups.append(set(syns))
+    for term in raw:
+        canon = _SYNONYM_OF.get(term, term)
+        syns = {term}
+        if canon != term:
+            syns.add(canon)
+        if allow_expand:
+            syns.update(_CROSS_LINGUAL_MAP.get(canon, ()))
+            syns.update(_CROSS_LINGUAL_MAP.get(term, ()))
+        groups.append(syns)
     return raw, groups
+
+def _group_hits(groups, terms):
+    return sum(1 for group in groups if group & terms)
 
 def _bm25_concepts(groups, counters):
     if not counters or not groups:
@@ -97,7 +129,7 @@ def _bm25_concepts(groups, counters):
     return scores, matched_groups
 
 def retrieve(store, query, external=False, limit=4, company_id=None, per_document=False):
-    condition = " AND d.allow_external=1" if external else ""
+    condition = ""  # Legacy external argument no longer restricts eligible knowledge.
     rows = store.rows("""SELECT c.id,c.document_id,c.locator,c.text,d.title,d.source,d.date,d.zh_summary,d.zh_keywords,d.company_id FROM chunks c
         JOIN documents d ON d.id=c.document_id WHERE d.kind='knowledge' AND d.demo=0 AND d.quarantined_at IS NULL""" + condition + " ORDER BY c.id")
     scoped = store.rows("SELECT document_id,id FROM companies WHERE document_id IS NOT NULL") if store.one("SELECT name FROM sqlite_master WHERE type='table' AND name='companies'") else []
@@ -135,43 +167,57 @@ def retrieve(store, query, external=False, limit=4, company_id=None, per_documen
     chunk_scores_exp, _ = _bm25_concepts(groups_exp, chunk_counters)
 
     ranked = []
-    for row, c_raw, c_exp in zip(rows, chunk_scores_raw, chunk_scores_exp):
+    core_n = _core_count(raw_list)
+    has_cjk_query = bool(re.search(r"[\u4e00-\u9fff]", query))
+    for index, (row, c_raw, c_exp) in enumerate(zip(rows, chunk_scores_raw, chunk_scores_exp)):
         did = row["document_id"]
+        doc_index = doc_ids.index(did)
         enriched = bool(row["zh_summary"] or row["zh_keywords"])
-        has_cjk_query = bool(re.search(r"[\u4e00-\u9fff]", query))
         title_tokens = set(tokens(row["title"]))
-        # If query is in Chinese and the document is already enriched in Chinese, require either a direct Chinese match
-        # in its title/summary/keywords or a direct match in the document title (prevent footer noise in foreign body).
-        if has_cjk_query and enriched and doc_scores_raw[doc_ids.index(did)] <= 0 and not (expanded_query_terms & title_tokens):
-            continue
+        raw_doc = doc_scores_raw[doc_index]
+        exp_doc = doc_scores_exp[doc_index]
+        # A Chinese summary/keyword/title hit stays at full weight. A foreign body that matches the
+        # expanded terms, while the summary never states the Chinese meaning, is kept behind those hits.
+        summary_side = raw_doc > 0 or exp_doc > 0 or bool(expanded_query_terms & title_tokens)
+        demote = 1.0
+        if has_cjk_query and enriched and not summary_side:
+            body_terms = set(chunk_counters[index])
+            body_hits = _group_hits(groups_exp, body_terms)
+            specific = any((group & body_terms) & _SPECIFIC for group in groups_exp)
+            if body_hits < 2 and not specific:
+                continue
+            demote = 0.35
         active_groups = groups_exp if enriched else groups_raw
         q_terms = expanded_query_terms if enriched else raw_query_terms
         c_score = c_exp if enriched else c_raw
         # Weight document-level Chinese summary/keyword raw hits higher than expanded body hits
-        base_score = doc_scores_raw[doc_ids.index(did)] * 1.5 + doc_scores[did] * 0.5 + c_score * 0.4
+        base_score = raw_doc * 1.5 + doc_scores[did] * 0.5 + c_score * 0.4
         if base_score <= 0:
             continue
         all_doc_tokens = set(tokens(" ".join((row["title"], row["zh_keywords"], row["zh_summary"], row["text"]))))
         matched_concepts = sum(1 for grp in active_groups if grp & all_doc_tokens)
         title_hit = bool(q_terms & set(tokens(row["title"])))
-        if len(raw_query_terms) >= 4 and matched_concepts <= 1 and not title_hit:
-            continue
+        coverage_discount = 0.45 if core_n >= 2 and matched_concepts <= 1 and not title_hit else 1.0
         if per_document and did in owners:
             specific_title_terms = set(tokens(row["title"])) - {"印尼", "印度", "度尼", "尼西", "西亚", "有限", "限公", "公司"}
             if not (raw_query_terms & specific_title_terms):
                 continue
         coverage_boost = (1.0 + 0.6 * max(0, matched_concepts - 1)) ** 2
-        score = base_score * coverage_boost
+        raw_rank = base_score * coverage_boost * coverage_discount
         row.pop("company_id", None)
         row["_mc"] = matched_concepts
-        row["score"] = round(score, 3)
+        row["_tier"] = 0 if demote < 1 else 1
+        row["_pre"] = raw_rank
+        row["score"] = round(raw_rank * demote, 3)
         ranked.append(row)
-    ranked.sort(key=lambda r: (r["_mc"], r["score"], -r["id"]), reverse=True)
+    ranked.sort(key=lambda r: (r["_tier"], r["_mc"], r["score"], -r["id"]), reverse=True)
     if ranked:
-        top_score = ranked[0]["score"]
-        ranked = [r for r in ranked if r["score"] >= top_score * 0.25]
+        top_score = max(r["_pre"] for r in ranked)
+        ranked = [r for r in ranked if r["_pre"] >= top_score * 0.25]
     for r in ranked:
         r.pop("_mc", None)
+        r.pop("_tier", None)
+        r.pop("_pre", None)
     if per_document:
         seen = set()
         ranked = [r for r in ranked if not (r["document_id"] in seen or seen.add(r["document_id"]))]
@@ -179,6 +225,13 @@ def retrieve(store, query, external=False, limit=4, company_id=None, per_documen
         for row in ranked:
             row.pop("zh_summary", None)
             row.pop("zh_keywords", None)
+    # Hybrid order only when vectors are ready; otherwise BM25 rows, scores and order are returned untouched.
+    try:
+        fused = fuse_hits(store, query, ranked, limit, external, company_id, per_document)
+    except Exception:
+        fused = None
+    if fused is not None:
+        return fused
     return ranked[:limit]
 
 

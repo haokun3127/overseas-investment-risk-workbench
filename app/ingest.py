@@ -9,6 +9,7 @@ from docx import Document
 from openpyxl import load_workbook
 from pypdf import PdfReader
 from .store import now
+from .publication import from_text, from_snapshot
 
 MAX_TEXT = 60000
 ALIASES = {'标题': 'title', '时间': 'date', '日期': 'date', '来源': 'source', '正文': 'body', '正文内容': 'body', '内容': 'body', '原始链接': 'url', '链接': 'url'}
@@ -104,6 +105,15 @@ def insert_document(store, record, kind='event', allow_external=False, demo=Fals
     r = validate_record(record)
     meta = meta or {}
     date_source = (meta.get('date_source') or 'provided') if r['date'] else ''
+    if not r['date'] and not any(term in r['source'] for term in ('事实摘录', '公司信息档案')):
+        r['date'], date_source, _ = from_text(r['body'])
+        if file_path:
+            uploads = (store.directory / 'uploads').resolve()
+            original = (uploads / file_path).resolve()
+            if original.is_relative_to(uploads) and original.is_file() and original.stat().st_size <= 16 * 1024 * 1024:
+                content_type = {'.pdf': 'application/pdf', '.html': 'text/html', '.htm': 'text/html'}.get(original.suffix.lower())
+                if content_type:
+                    r['date'], date_source, _ = from_snapshot(original.read_bytes(), content_type, r['body'])
     scope_prefix = f'c{company_id}\0' if company_id else ''
     digest = hashlib.sha256((scope_prefix + kind + '\0' + str(demo) + '\0' + r['title'] + '\0' + r['body']).encode()).hexdigest()
     with store.db() as db:
@@ -114,7 +124,7 @@ def insert_document(store, record, kind='event', allow_external=False, demo=Fals
                 title,date,source,url,body,kind,allow_external,demo,digest,file_path,filename,created_at,company_id,
                 date_source,archived_at,fetched_at
             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', (
-                r['title'], r['date'], r['source'], r['url'], r['body'], kind, int(allow_external),
+                r['title'], r['date'], r['source'], r['url'], r['body'], kind, int(not demo),
                 int(demo), digest, file_path, filename, now(), company_id, date_source,
                 str(meta.get('archived_at') or ''), str(meta.get('fetched_at') or ''),
             )).lastrowid

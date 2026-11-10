@@ -23,7 +23,13 @@ def backup(directory,destination):
     try: source.backup(target)
     finally: source.close();target.close()
     shutil.copytree(directory/'uploads',destination/'uploads')
-    (destination/'backup.json').write_text(json.dumps({'created_at':datetime.now().isoformat(),'format':1},indent=2),encoding='utf-8')
+    for name in ('reference-data','reference-copies','archive-copies'):
+        source_dir=directory/name
+        if source_dir.is_dir():
+            if source_dir.is_symlink() or source_dir.resolve().parent!=directory.resolve():
+                raise ValueError('参考原文目录不得指向数据目录之外。')
+            shutil.copytree(source_dir,destination/name)
+    (destination/'backup.json').write_text(json.dumps({'created_at':datetime.now().astimezone().isoformat(),'format':1},indent=2),encoding='utf-8')
     print(f'备份完成：{destination}')
 
 def main():

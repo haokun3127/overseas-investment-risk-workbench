@@ -1,0 +1,32 @@
+
+/* Client five-level warning, 2026-10-27. Old red/orange/yellow stay for history. */
+.badge.lv1 { color: #b42342; background: #fff1f3; border-color: #efc2cc; }
+.badge.lv2 { color: #8a6a08; background: #fff8dc; border-color: #ead48a; }
+.badge.lv3 { color: #1d4e89; background: #eef5ff; border-color: #c5d7f2; }
+.badge.lv4 { color: #4b5563; background: #f3f4f6; border-color: #d8dee6; }
+.badge.lv5 { color: #166534; background: #f0fdf4; border-color: #b7e4c7; }
+.badge.red, .badge.orange, .badge.yellow { box-shadow: inset 0 0 0 1px dashed currentColor; }
+.dot.lv1 { background: #b42342; }
+.dot.lv2 { background: #c4a035; }
+.dot.lv3 { background: #2f6fad; }
+.dot.lv4 { background: #7b8794; }
+.dot.lv5 { background: #2f8f5b; }
+.dot.legacy { background: #94a3b8; }
+.ring-segment.lv1 { stroke: #b42342; }
+.ring-segment.lv2 { stroke: #c4a035; }
+.ring-segment.lv3 { stroke: #2f6fad; }
+.ring-segment.lv4 { stroke: #7b8794; }
+.ring-segment.lv5 { stroke: #2f8f5b; }
+.stat.lv1 .stat-number, .kpi-strip .stat.lv1 .stat-number { color: #b42342; }
+.stat.lv2 .stat-number, .kpi-strip .stat.lv2 .stat-number { color: #8a6a08; }
+.stat.lv3 .stat-number, .kpi-strip .stat.lv3 .stat-number { color: #1d4e89; }
+.stat.lv4 .stat-number, .kpi-strip .stat.lv4 .stat-number { color: #4b5563; }
+.stat.lv5 .stat-number, .kpi-strip .stat.lv5 .stat-number { color: #166534; }
+.stat.legacy .stat-number, .kpi-strip .stat.legacy .stat-number { color: #64748b; }
+.brief-metric.lv1 > strong, .brief-metric.lv1 i { color: #b42342; }
+.brief-metric.lv2 > strong, .brief-metric.lv2 i { color: #8a6a08; }
+.brief-metric.lv3 > strong, .brief-metric.lv3 i { color: #1d4e89; }
+.brief-metric.lv4 > strong, .brief-metric.lv4 i { color: #4b5563; }
+.brief-metric.lv5 > strong, .brief-metric.lv5 i { color: #166534; }
+.page-overview > .stats.kpi-strip { grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); }
+.brief-metrics { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }

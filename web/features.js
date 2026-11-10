@@ -5,18 +5,176 @@ const workDrafts = new Map();
 const activityNames={checklist_generated:'采用补证建议清单',checklist_added:'新增补证事项',checklist_updated:'修改补证事项',website_update_reviewed:'核验网站更新',website_update_transferred:'网站更新转为分析资料',evidence_added:'添加补充证据',evidence_unlinked:'移除补充材料关联',evidence_reanalysis:'提交补证分析',rules_updated:'更新风险规则',document_imported:'导入资料',file_imported:'上传文件',document_policy_changed:'调整资料使用范围',document_deleted:'删除资料',event_reviewed:'保存业务复核',analysis_completed:'完成风险分析',analysis_failed:'分析失败',job_cancelled:'取消分析任务',events_exported:'导出风险台账',demo_seeded:'载入演示数据',demo_cleared:'清除演示数据',model_checked:'检查模型连接',company_saved:'保存公司档案',company_knowledge_synced:'公司档案放入知识库',website_configured:'保存网站配置',website_imported_sources:'批量导入网站',website_toggled:'启用或停用网站',website_deleted:'删除网站',website_searched:'完成网站检索',website_group_run:'分组批量检索',website_rereview:'重新筛选检索结果',website_imported:'网站页面入库',website_group_cancelled:'取消分组剩余检索',documents_quarantined:'隔离可疑资料',documents_unquarantined:'撤销资料隔离',dates_repaired:'修复资料日期',dates_reverted:'回滚资料日期修复',company_registered:'注册企业账号'};
 // The bare id= in an audit detail names a different object depending on the action.
 const activityObject=action=>/^company_/.test(action)?'公司编号：':/^website_(configured|toggled|deleted)/.test(action)?'网站编号：':/^website_(searched|rereview)/.test(action)?'检索任务编号：':/^job_/.test(action)?'任务编号：':'资料编号：';
-function activityDetail(detail,action=''){return detail.replace(/connection and JSON protocol verified/g,'连接与 JSON 协议验证通过').replace(/allow_external=True/g,'允许外部分析').replace(/allow_external=False/g,'未授权 AI 使用').replace(/created=True/g,'已新增').replace(/created=False/g,'资料重复').replace(/status=accepted/g,'结论：已认可').replace(/status=needs_change/g,'结论：需修正').replace(/status=pending/g,'结论：待复核').replace(/scope=demo/g,'范围：演示数据').replace(/scope=real/g,'范围：非演示数据').replace(/scope=all/g,'范围：全部资料').replace(/enabled=1/g,'已启用').replace(/enabled=0/g,'已停用').replace(/kind=knowledge/g,'用途：知识库').replace(/kind=event/g,'用途：风险资料').replace(/event=/g,'事件编号：').replace(/events=/g,'风险事件数：').replace(/document=/g,'资料编号：').replace(/job=/g,'任务编号：').replace(/analysis=/g,'分析编号：').replace(/category=/g,'分组：').replace(/company=None/g,'全部公司').replace(/company=/g,'公司编号：').replace(/reason=/g,'原因：').replace(/count=/g,'数量：').replace(/rows=/g,'记录数：').replace(/skipped=/g,'跳过：').replace(/errors=/g,'无效：').replace(/created=/g,'新增数：').replace(/\bid=/g,activityObject(action));}
+function activityDetail(detail,action=''){return detail.replace(/connection and JSON protocol verified/g,'连接与 JSON 协议验证通过').replace(/allow_external=True/g,'允许外部分析').replace(/allow_external=False/g,'仅保存资料').replace(/created=True/g,'已新增').replace(/created=False/g,'资料重复').replace(/status=accepted/g,'结论：已认可').replace(/status=needs_change/g,'结论：需修正').replace(/status=pending/g,'结论：待复核').replace(/scope=demo/g,'范围：演示数据').replace(/scope=real/g,'范围：非演示数据').replace(/scope=all/g,'范围：全部资料').replace(/enabled=1/g,'已启用').replace(/enabled=0/g,'已停用').replace(/kind=knowledge/g,'用途：知识库').replace(/kind=event/g,'用途：风险资料').replace(/event=/g,'事件编号：').replace(/events=/g,'风险事件数：').replace(/document=/g,'资料编号：').replace(/job=/g,'任务编号：').replace(/analysis=/g,'分析编号：').replace(/category=/g,'分组：').replace(/company=None/g,'全部公司').replace(/company=/g,'公司编号：').replace(/reason=/g,'原因：').replace(/count=/g,'数量：').replace(/rows=/g,'记录数：').replace(/skipped=/g,'跳过：').replace(/errors=/g,'无效：').replace(/created=/g,'新增数：').replace(/\bid=/g,activityObject(action));}
 
-function ruleFields(r){
-  if (state.auth?.role === 'company') {
-    return ruleFieldsReadOnly(r);
+function textareaBody(text) {
+  const value = text == null ? '' : String(text);
+  return value.startsWith('\n') ? `\n${value}` : value;
+}
+
+function groupRuleCategories(list) {
+  const remaining = (list || []).map((name) => String(name).trim()).filter(Boolean);
+  const families = RISK_TREE.map(([family, groups]) => ({
+    family,
+    groups: groups.map(([group, items]) => {
+      const known = new Set(items);
+      const lines = [];
+      const next = [];
+      remaining.forEach((name) => {
+        if (known.has(name)) lines.push(name);
+        else next.push(name);
+      });
+      remaining.length = 0;
+      next.forEach((name) => remaining.push(name));
+      return {
+        group,
+        lines,
+        missing: items.filter((item) => !lines.includes(item)),
+      };
+    }),
+  }));
+  return { families, extra: remaining.slice() };
+}
+
+function ruleNamesHtml(lines) {
+  if (!lines.length) return '<span class="rules-group__empty">暂无</span>';
+  return lines.map((name) => esc(name)).join('、');
+}
+
+function ruleGroupRow(title, lines, editable, groupKey) {
+  const names = ruleNamesHtml(lines);
+  if (!editable) {
+    return `<div class="rules-group"><div class="rules-group__title"><strong title="${esc(title)}">${esc(title)}</strong><span class="rules-group__count">${lines.length} 项</span></div><p class="rules-group__names">${names}</p></div>`;
   }
-  return `<p class="form-note">逐项填写业务标准。保存后用于后续分析，历史版本保留原规则。</p><div class="form-grid"><label class="field full">规则版本<input name="version" maxlength="60" required value="${esc(r.version)}"></label><label class="field full">风险类型（每行一个，最多30个）<textarea name="categories" rows="6" required>${esc(r.categories.join('\n'))}</textarea></label>${Object.entries(levels).map(([v,l])=>`<label class="field full">${l}判定标准<textarea name="level_${v}" maxlength="2000" rows="3" required>${esc(r.levels[v])}</textarea></label>`).join('')}<label class="field full">适用范围与补充说明<textarea name="notes" rows="3" maxlength="5000">${esc(r.notes)}</textarea></label></div><label class="check-field"><input type="checkbox" name="confirmed" ${r.confirmed?'checked':''}><span>这份规则已经过甲方业务确认，可以用于后续风险分析。</span></label><button class="primary" type="submit">保存规则</button><div id="rules-error" aria-live="polite"></div>`;
+  const attr = `aria-label="${esc(title)}指标" ` + (groupKey ? `data-cat-group="${esc(groupKey)}"` : 'data-cat-group');
+  const rows = Math.max(lines.length, 2);
+  return `<div class="rules-group"><div class="rules-group__title"><strong title="${esc(title)}">${esc(title)}</strong><span class="rules-group__count">${lines.length} 项</span></div><div class="rules-group__body"><p class="rules-group__names">${names}</p><textarea class="rule-items" ${attr} hidden rows="${rows}">${esc(textareaBody(lines.join('\n')))}</textarea><p class="rules-group__hint" hidden></p></div><div class="rules-group__actions"><button type="button" class="text-button" data-cat-edit aria-expanded="false">编辑</button><span class="rules-group__editing" hidden><button type="button" class="text-button" data-cat-done>完成</button><button type="button" class="text-button" data-cat-cancel>取消</button></span></div></div>`;
+}
+
+function ruleCategoryGroupsHtml(grouped, editable) {
+  const families = grouped.families.map((family) => {
+    const count = family.groups.reduce((sum, group) => sum + group.lines.length, 0);
+    const rows = family.groups.map((group) => ruleGroupRow(group.group, group.lines, editable)).join('');
+    return `<section class="rules-family"><h3 class="rules-family__head">${esc(family.family)}<span class="rules-family__count">${family.groups.length} 个二级 · ${count} 项</span></h3><div class="rules-groups">${rows}</div></section>`;
+  }).join('');
+  if (!grouped.extra.length) {
+    const holder = editable ? '<textarea data-cat-group="extra" hidden></textarea>' : '';
+    return `${families}${holder}<p class="rules-unassigned-empty">全部指标均已归入分类树</p>`;
+  }
+  return `${families}<div class="rules-groups">${ruleGroupRow('未归入分类树', grouped.extra, editable, 'extra')}</div>`;
+}
+
+function ruleLevelRows(r, editable) {
+  const dots = { lv1: 'high', lv2: 'mid', lv3: 'mid', lv4: 'low', lv5: 'low', red: 'high', orange: 'mid', yellow: 'low' };
+  const rows = Object.entries(levels).map(([key, label]) => {
+    const text = r.levels?.[key] || '';
+    const body = editable
+      ? `<textarea name="level_${key}" aria-label="${esc(label)}分级规则" maxlength="2000" rows="1" required>${esc(textareaBody(text))}</textarea>`
+      : `<div class="rule-notes-ro">${esc(text)}</div>`;
+    return `<div><dt><span class="rules-level-dot rules-level-dot--${dots[key] || 'low'}"></span>${esc(label)}</dt><dd>${body}</dd></div>`;
+  }).join('');
+  return `<dl class="rules-levels">${rows}</dl>`;
+}
+
+function ruleFields(r) {
+  if (state.auth?.role === 'company') return ruleFieldsReadOnly(r);
+  const grouped = groupRuleCategories(r.categories || []);
+  const original = (r.categories || []).join('\n');
+  return `<p class="form-note">三级指标按甲方的一级、二级排列。要改某一组的名称，点该组的「编辑」，每行一个，须与名单完全一致。</p><div class="rules-meta"><label class="field">规则版本<input name="version" maxlength="60" required value="${esc(r.version)}"></label></div><textarea name="categories" hidden>${esc(textareaBody(original))}</textarea>${ruleLevelRows(r, true)}<div class="rule-tree">${ruleCategoryGroupsHtml(grouped, true)}</div><label class="rule-notes"><span class="rule-notes-label">适用范围与补充说明</span><textarea name="notes" maxlength="5000" rows="8">${esc(textareaBody(r.notes || ''))}</textarea><span class="rule-count">${(r.notes || '').length} / 5000</span></label><div class="rules-submit"><label class="check-field"><input type="checkbox" name="confirmed" ${r.confirmed ? 'checked' : ''}><span>这份规则已经过甲方业务确认，可以用于后续风险分析。</span></label><button class="primary" type="submit">保存规则</button></div><div id="rules-error" aria-live="polite"></div>`;
 }
 
 function ruleFieldsReadOnly(r) {
-  const fields = `<label class="field full">规则版本<input value="${esc(r.version)}" disabled></label><label class="field full">风险类型<textarea rows="6" disabled>${esc(r.categories.join('\n'))}</textarea></label>${Object.entries(levels).map(([v, l]) => `<label class="field full">${l}判定标准<textarea rows="3" disabled>${esc(r.levels[v])}</textarea></label>`).join('')}<label class="field full">适用范围与补充说明<textarea rows="3" disabled>${esc(r.notes)}</textarea></label>`;
-  return `<p class="form-note">风险分类分级规则由平台管理员维护，企业账号只读。当前状态：${r.confirmed ? '已确认，可用于分析' : '尚未确认，分析会被拒绝'}。</p><div class="form-grid">${fields}</div>`;
+  const grouped = groupRuleCategories(r.categories || []);
+  const status = r.confirmed ? '已确认，可用于分析' : '尚未确认，分析会被拒绝';
+  return `<p class="form-note">风险分类分级规则由平台管理员维护，企业账号只读。当前状态：${status}。</p><div class="rules-meta"><label class="field">规则版本<input value="${esc(r.version)}" disabled></label></div>${ruleLevelRows(r, false)}<div class="rule-tree">${ruleCategoryGroupsHtml(grouped, false)}</div><section class="rule-notes"><p class="rule-notes-label">适用范围与补充说明</p><div class="rule-notes-ro">${esc(r.notes || '')}</div></section>`;
+}
+
+function catLines(value) {
+  return String(value || '').split('\n').map((name) => name.trim()).filter(Boolean);
+}
+
+function syncCatRow(row) {
+  const area = row.querySelector('[data-cat-group]');
+  const names = row.querySelector('.rules-group__names');
+  const count = row.querySelector('.rules-group__count');
+  const list = catLines(area?.value);
+  if (names) names.innerHTML = list.length ? list.map((name) => esc(name)).join('、') : '<span class="rules-group__empty">暂无</span>';
+  if (count) count.textContent = `${list.length} 项`;
+  const family = row.closest('.rules-family');
+  const meta = family?.querySelector('.rules-family__count');
+  if (family && meta) {
+    const groups = family.querySelectorAll('.rules-group').length;
+    const total = [...family.querySelectorAll('[data-cat-group]')].reduce((sum, el) => sum + catLines(el.value).length, 0);
+    meta.textContent = `${groups} 个二级 · ${total} 项`;
+  }
+}
+
+function closeCatEdit(row, commit) {
+  const area = row.querySelector('[data-cat-group]');
+  if (!area) return;
+  if (!commit && Object.prototype.hasOwnProperty.call(area, '_catSnapshot')) area.value = area._catSnapshot;
+  delete area._catSnapshot;
+  area.hidden = true;
+  row.classList.remove('is-editing');
+  const edit = row.querySelector('[data-cat-edit]');
+  if (edit) {
+    edit.hidden = false;
+    edit.setAttribute('aria-expanded', 'false');
+  }
+  const editing = row.querySelector('.rules-group__editing');
+  const names = row.querySelector('.rules-group__names');
+  const hint = row.querySelector('.rules-group__hint');
+  if (editing) editing.hidden = true;
+  if (names) names.hidden = false;
+  if (hint) hint.hidden = true;
+  syncCatRow(row);
+}
+
+function openCatEdit(row) {
+  row.closest('form')?.querySelectorAll('.rules-group.is-editing').forEach((open) => {
+    if (open !== row) closeCatEdit(open, true);
+  });
+  const area = row.querySelector('[data-cat-group]');
+  area._catSnapshot = area.value;
+  area.hidden = false;
+  row.classList.add('is-editing');
+  row.querySelector('.rules-group__names').hidden = true;
+  const edit = row.querySelector('[data-cat-edit]');
+  edit.hidden = true;
+  edit.setAttribute('aria-expanded', 'true');
+  row.querySelector('.rules-group__editing').hidden = false;
+  const hint = row.querySelector('.rules-group__hint');
+  if (hint) hint.hidden = false;
+  autoSizeTextarea(area);
+  area.focus();
+}
+
+function autoSizeTextarea(el) {
+  const capped = el.name === 'notes';
+  el.style.overflowY = 'hidden';
+  el.style.height = 'auto';
+  const next = el.scrollHeight + 2;
+  const cap = capped ? Math.round(window.innerHeight * 0.7) : next;
+  el.style.height = `${Math.min(next, cap)}px`;
+  el.style.overflowY = next > cap ? 'auto' : 'hidden';
+  el.scrollTop = 0;
+}
+
+function collectRuleCategories(rulesForm) {
+  const groups = [...rulesForm.querySelectorAll('[data-cat-group]')];
+  const untouched = groups.every((el) => el.value === el.defaultValue);
+  if (untouched) return rulesForm.elements.categories.value.split('\n').map((name) => name.trim()).filter(Boolean);
+  const seen = new Set();
+  const names = [];
+  groups.forEach((el) => {
+    el.value.split('\n').forEach((line) => {
+      const name = line.trim();
+      if (!name || seen.has(name)) return;
+      seen.add(name);
+      names.push(name);
+    });
+  });
+  return names;
 }
 
 function discoveriesPanel(items){
@@ -28,6 +186,7 @@ function workspacePanel(w){
 
 async function enhanceView(route,html){
   const host=document.createElement('div');host.innerHTML=html;
+  if(route==='settings')host.querySelector('#rules-form')?.closest('section')?.classList.add('rule-card');
   if(route==='settings'&&state.auth?.role==='company'){
     host.querySelector('#rules-form').innerHTML=ruleFields(state.config.rules);
     host.querySelector('#rules-form').removeAttribute('id');
@@ -36,8 +195,8 @@ async function enhanceView(route,html){
   else if(route==='settings'){
     host.querySelector('#rules-form').innerHTML=ruleFields(state.config.rules);
     host.querySelector('.panel-content').insertAdjacentHTML('beforeend',`<h3>演示数据</h3><p class="form-note">内置的虚构演示资料和风险事件（标有“演示”）只用于熟悉流程，不是真实风险。正式使用前建议清除。</p><p><button class="secondary" id="clear-demo">清除全部演示数据</button></p>`);
-    host.querySelector('.panel-content').insertAdjacentHTML('beforeend',`<h3>连接检查</h3><p class="form-note">仅发送固定合成测试内容，不读取业务资料。外部 API 可能产生少量调用费用。</p><button class="secondary" id="model-check" ${state.config.configured?'':'disabled'}>发送合成内容并检查连接</button><div id="model-check-result" aria-live="polite"></div>`);
-    try{const r=await api('/runtime');host.insertAdjacentHTML('beforeend',`<section class="panel"><div class="panel-heading"><h2>服务运行状态</h2><button class="text-button" data-refresh>更新状态</button></div><div class="panel-content"><dl class="definition"><dt>状态时间</dt><dd>${when(r.checked_at)}</dd><dt>后台队列</dt><dd>${r.worker_enabled?'已启用':'未启用（当前实例不执行任务）'}</dd><dt>资料与索引</dt><dd>${r.documents} 条资料 · ${r.chunks} 个文本片段 · ${r.analyses} 个分析版本</dd><dt>数据库大小</dt><dd>${(r.database_bytes/1048576).toFixed(2)} MB（不含附件及 WAL 文件）</dd><dt>磁盘可用</dt><dd>${(r.disk_free_bytes/1073741824).toFixed(2)} GB</dd><dt>最近分析记录</dt><dd>${r.last_analysis?when(r.last_analysis.created_at)+' · '+esc(r.last_analysis.model):'暂无分析记录'}</dd><dt>网站抓取备用出口</dt><dd>${r.fetch_proxy?'已启用（直连失败时改走本机代理）':'未配置'}</dd><dt>浏览器渲染服务</dt><dd>${r.renderer?'已启用（脚本加载的页面由隔离浏览器渲染）':'未配置'}</dd><dt>中文摘要</dt><dd>${r.enrich_pending?`${r.enrich_pending} 份资料待生成`:'全部已生成'}${r.enrich_failed?` · ${r.enrich_failed} 份生成失败`:''}</dd><dt>模型最近一次错误</dt><dd>${r.model_error?`${when(r.model_error.at)} · ${esc(r.model_error.error)}`:'暂无'}</dd><dt>自动备份</dt><dd>${!r.backup?'未配置（请按 README 设置每日备份）':r.backup.created_at?'最近一次 '+when(r.backup.created_at)+' · 共保留 '+r.backup.count+' 份':'已配置，尚未生成备份'}</dd></dl><p class="form-note">备份包含数据库和附件，不含密钥配置。恢复流程见项目 README。</p></div></section>`);}catch(e){host.insertAdjacentHTML('beforeend',errorBox('运行状态读取失败：'+e.message));}
+    host.querySelector('.panel-content').insertAdjacentHTML('beforeend',`<h3>连接检查</h3><p class="form-note">检查服务器与当前模型的连接。</p><button class="secondary" id="model-check" ${state.config.configured?'':'disabled'}>检查模型连接</button><div id="model-check-result" aria-live="polite"></div>`);
+    try{const r=await api('/runtime');host.insertAdjacentHTML('beforeend',`<section class="panel"><div class="panel-heading"><h2>服务运行状态</h2><button class="text-button" data-refresh>更新状态</button></div><div class="panel-content"><dl class="definition"><dt>状态时间</dt><dd>${when(r.checked_at)}</dd><dt>后台队列</dt><dd>${r.worker_enabled?'已启用':'未启用（当前实例不执行任务）'}</dd><dt>资料与索引</dt><dd>${r.documents} 条资料 · ${r.chunks} 个文本片段 · ${r.analyses} 个分析版本</dd><dt>数据库大小</dt><dd>${(r.database_bytes/1048576).toFixed(2)} MB（不含附件及 WAL 文件）</dd><dt>磁盘可用</dt><dd>${(r.disk_free_bytes/1073741824).toFixed(2)} GB</dd><dt>最近分析记录</dt><dd>${r.last_analysis?when(r.last_analysis.created_at)+' · '+esc(r.last_analysis.model):'暂无分析记录'}</dd><dt>网站抓取备用出口</dt><dd>${r.fetch_proxy?'已启用（直连失败时改走本机代理）':'未配置'}</dd><dt>浏览器渲染服务</dt><dd>${r.renderer?'已启用（脚本加载的页面由隔离浏览器渲染）':'未配置'}</dd><dt>中文摘要</dt><dd>${r.enrich_pending?`${r.enrich_pending} 份资料待生成`:'全部已生成'}${r.enrich_failed?` · ${r.enrich_failed} 份生成失败`:''}</dd><dt>模型最近一次错误</dt><dd>${r.model_error?`${when(r.model_error.at)} · ${esc(r.model_error.error)}`:'暂无'}</dd><dt>自动备份</dt><dd>${r.backup?.state==='failed'?`<strong class="error">最近执行失败：${esc(r.backup.error)}</strong><br>`:r.backup?.state==='running'?'备份正在执行<br>':''}${!r.backup?'未配置（请按 README 设置每日备份）':r.backup.created_at?'最近一次 '+when(r.backup.created_at)+' · 共保留 '+r.backup.count+' 份':'已配置，尚未生成备份'}</dd></dl><p class="form-note">备份包含数据库和附件，不含密钥配置。恢复流程见项目 README。</p></div></section>`);}catch(e){host.insertAdjacentHTML('beforeend',errorBox('运行状态读取失败：'+e.message));}
   }
   if(route==='events'){
     const href='api/export/events?'+new URLSearchParams({...state.filter,demo:scopeValue()});
@@ -47,15 +206,24 @@ async function enhanceView(route,html){
   }
   if(route==='event'){
     const e=state.currentEvent;
+    const summary=host.querySelector('.detail-grid>div:first-child>.panel');
+    const modelHeading=summary?.querySelector('.detail-section:last-child h2');
+    if(modelHeading)modelHeading.textContent='模型针对本事件的建议';
+    summary?.insertAdjacentHTML('beforeend',countermeasureEventHtml(e.countermeasures));
     const form=host.querySelector('#review-form');
     form.insertAdjacentHTML('beforeend',`<details class="review-history"><summary>复核历史 · ${e.review_history.length} 条</summary>${e.review_history.length?e.review_history.map(h=>`<article><div>${badge(h.status)} <small>${when(h.created_at)}</small></div><p>${esc(h.note||'未填写意见')}</p></article>`).join(''):'<p class="form-note">保存复核后会在此保留每次结论与意见。</p>'}</details>`);
     host.querySelector('.back-link').href=state.lastEvents||eventHref();
   }
+  if(route==='report'){
+    host.querySelectorAll('.brief-action h3').forEach(h=>{h.textContent='模型针对本事件的建议';});
+    host.querySelector('.brief-end')?.insertAdjacentHTML('beforebegin',countermeasureReportHtml(state.reportCountermeasures));
+  }
   if(route==='documents'||route==='knowledge'){
+    if(route==='documents')host.querySelector('.page-heading .actions').insertAdjacentHTML('afterbegin','<a class="secondary" href="#evidence">待补证</a>');
     if(state.auth?.role==='admin')host.querySelector('.page-heading .actions').insertAdjacentHTML('beforeend','<a class="secondary" href="#websites">从网站检索资料</a>');
     const form=host.querySelector('#document-filter');
     form.querySelector('input').placeholder='按标题或来源搜索';
-    form.insertAdjacentHTML('beforeend',`<label>使用范围<select name="policy">${[['','全部资料'],['local','未授权 AI 使用'],['external','允许外部分析']].map(([v,l])=>`<option value="${v}" ${state.filter.policy===v?'selected':''}>${l}</option>`).join('')}</select></label>${route==='documents'?`<label>分析状态<select name="status">${[['','全部状态'],['unanalysed','尚无分析结果'],['queued','排队中'],['running','分析中'],['completed','已完成'],['failed','失败']].map(([v,l])=>`<option value="${v}" ${state.filter.status===v?'selected':''}>${l}</option>`).join('')}</select></label>`:''}<label>排序<select name="sort"><option value="">最近入库</option><option value="date" ${state.filter.sort==='date'?'selected':''}>资料日期（新到旧）</option></select></label><button class="text-button" type="button" id="reset-doc-filter">重置</button>`);
+    form.insertAdjacentHTML('beforeend',`${route==='documents'?`<label>分析状态<select name="status">${[['','全部状态'],['unanalysed','尚无分析结果'],['queued','排队中'],['running','分析中'],['completed','已完成'],['failed','失败']].map(([v,l])=>`<option value="${v}" ${state.filter.status===v?'selected':''}>${l}</option>`).join('')}</select></label>`:''}<label>排序<select name="sort"><option value="">最近入库</option><option value="date" ${state.filter.sort==='date'?'selected':''}>资料日期（新到旧）</option></select></label><button class="text-button" type="button" id="reset-doc-filter">重置</button>`);
     const importForm=host.querySelector('#import-form');
     if(state.importMode==='manual')importForm.insertAdjacentHTML('afterbegin','<p class="draft-hint" id="draft-status" role="status">手动录入内容在本次页面会话内暂存。</p>');
     const body=importForm.querySelector('[name=body]');
@@ -78,7 +246,7 @@ async function enhanceView(route,html){
       }
       if(route==='knowledge'){
         const d=w.documents.knowledge||{count:0,authorized:0,characters:0};
-        host.querySelector('.page-heading').insertAdjacentHTML('afterend',`<div class="library-summary"><span><strong>${d.count}</strong> 份参考资料</span><span><strong>${d.characters.toLocaleString('zh-CN')}</strong> 字符</span><span><strong>${d.authorized}</strong> 份允许外部分析</span><span>检索结果始终可以追溯原文</span></div>`);
+        host.querySelector('.page-heading').insertAdjacentHTML('afterend',`<div class="library-summary"><span><strong>${d.count}</strong> 份参考资料</span><span><strong>${d.characters.toLocaleString('zh-CN')}</strong> 字符</span></div>`);
       }
       if(route==='settings')host.insertAdjacentHTML('beforeend',`<section class="panel"><div class="panel-heading"><h2>最近操作记录</h2><small>最近15次已记录操作</small></div><div class="activity-list">${w.recent_activity.length?w.recent_activity.map(a=>`<article><strong>${esc(activityNames[a.action]||a.action)}</strong><time>${when(a.created_at)}</time><p>${esc(activityDetail(a.detail,a.action))}</p></article>`).join(''):'<p class="form-note">导入、分析、规则修改及业务复核后将产生操作记录。</p>'}</div></section>`);
     }catch(e){host.insertAdjacentHTML('beforeend',`<p class="form-note">补充统计暂不可用：${esc(e.message)}。主要业务功能仍可使用。</p>`);}
@@ -93,10 +261,47 @@ function bindFeatures(){
   if(state.route==='events')state.lastEvents=location.hash;
   const rulesForm=$('#rules-form');
   if(rulesForm){
+    const fitRulesForm=()=>{
+      rulesForm.querySelectorAll('textarea:not([hidden])').forEach(autoSizeTextarea);
+      const notes=rulesForm.querySelector('[name=notes]');
+      const count=rulesForm.querySelector('.rule-count');
+      if(notes&&count)count.textContent=`${notes.value.length} / 5000`;
+    };
+    const draftCount=()=>{
+      const seen=new Set();
+      let total=0;
+      rulesForm.querySelectorAll('[data-cat-group]').forEach((el)=>{
+        catLines(el.value).forEach((name)=>{
+          if(seen.has(name))return;
+          seen.add(name);
+          total+=1;
+        });
+      });
+      return total;
+    };
+    const refreshHint=()=>{
+      const hint=rulesForm.querySelector('.rules-group.is-editing .rules-group__hint');
+      if(hint)hint.textContent=`全部 ${draftCount()} / 80`;
+    };
+    fitRulesForm();
+    requestAnimationFrame(fitRulesForm);
+    rulesForm.addEventListener('input',()=>{fitRulesForm();refreshHint();});
+    rulesForm.addEventListener('click',(event)=>{
+      const row=event.target.closest('.rules-group');
+      if(!row)return;
+      if(event.target.closest('[data-cat-edit]'))openCatEdit(row);
+      else if(event.target.closest('[data-cat-done]'))closeCatEdit(row,true);
+      else if(event.target.closest('[data-cat-cancel]'))closeCatEdit(row,false);
+      refreshHint();
+    });
     rulesForm.addEventListener('submit',async e=>{
       e.preventDefault();e.stopImmediatePropagation();const b=$('[type=submit]',rulesForm);b.disabled=true;
       const f=new FormData(rulesForm);
-      const rules={version:f.get('version').trim(),categories:f.get('categories').split('\n').map(v=>v.trim()).filter(Boolean),levels:Object.fromEntries(Object.keys(levels).map(v=>[v,f.get('level_'+v).trim()])),notes:f.get('notes'),confirmed:f.has('confirmed')};
+      const categories=collectRuleCategories(rulesForm);
+      const notes=f.get('notes');
+      if(categories.length<1||categories.length>80){$('#rules-error').innerHTML=errorBox('三级指标须为 1 到 80 个。');b.disabled=false;return;}
+      if(String(notes||'').length>5000){$('#rules-error').innerHTML=errorBox('补充说明不能超过 5000 字。');b.disabled=false;return;}
+      const rules={version:f.get('version').trim(),categories,levels:Object.fromEntries(Object.keys(levels).map(v=>[v,f.get('level_'+v).trim()])),notes,confirmed:f.has('confirmed')};
       try{await api('/rules',{method:'PUT',body:rules});toast(rules.confirmed?'规则已保存，后续分析使用此版本':'规则已保存，确认前分析仍会被拒绝');await render();}catch(err){$('#rules-error').innerHTML=errorBox(err.message);b.disabled=false;}
     },true);
   }

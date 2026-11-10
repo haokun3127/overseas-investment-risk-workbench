@@ -38,7 +38,7 @@ function companyPanel(options = {}) {
      <p class="company-compact-note">${summary}</p>
    </section>`;
  }
- return `<section class="panel company-panel"><div class="panel-heading"><div><h2>${scoped?'本公司信息档案':'新分析背景公司'}</h2><small>${scoped?'维护贵司在印尼的投资与经营背景，用于精准风险研判':'选择本会话新分析使用的公司背景，并维护各公司档案'}</small></div><div class="actions">${actionsHtml}</div></div><div class="panel-content">${c?`<div class="company-summary">${Object.entries(companyLabels).map(([k,l])=>`<div><span>${l}</span><p>${esc(c[k]||'待补充')}</p></div>`).join('')}</div><p class="form-note">${c.document_id?'已入知识库 · 修改后自动同步同一条档案':'尚未放入知识库'} ｜ ${c.allow_external?'已允许外部 AI 使用公司背景':'未授权 AI 使用，仅保存和查看'} ｜ 更新：${when(c.updated_at)}</p>`:`<p class="muted">${companyData.items.length?'本会话尚未选择背景公司；无归属资料分析时不附带公司背景。':'还没有公司档案。先新增公司，填写行业、地区、投资阶段和重点关注风险。'}</p>`}${noteHtml}</div></section>`;
+ return `<section class="panel company-panel"><div class="panel-heading"><div><h2>${scoped?'本公司信息档案':'新分析背景公司'}</h2><small>${scoped?'维护贵司在印尼的投资与经营背景，用于精准风险研判':'选择本会话新分析使用的公司背景，并维护各公司档案'}</small></div><div class="actions">${actionsHtml}</div></div><div class="panel-content">${c?`<div class="company-summary">${Object.entries(companyLabels).map(([k,l])=>`<div><span>${l}</span><p>${esc(c[k]||'待补充')}</p></div>`).join('')}</div><p class="form-note">${c.document_id?'已入知识库 · 修改后自动同步同一条档案':'尚未放入知识库'} ｜ 更新：${when(c.updated_at)}</p>`:`<p class="muted">${companyData.items.length?'本会话尚未选择背景公司；无归属资料分析时不附带公司背景。':'还没有公司档案。先新增公司，填写行业、地区、投资阶段和重点关注风险。'}</p>`}${noteHtml}</div></section>`;
 }
 const companyGroups = [
   ['01', '基本信息', '名称、行业与投资概况', ['name', 'industry', 'location', 'stage', 'investment']],
@@ -74,11 +74,11 @@ function editCompany(c={}){
    + `<h2 id="company-dialog-title">${title}</h2><p class="dialog-sub">${c.id ? `${esc(c.name || '')} · 更新于 ${when(c.updated_at)}` : '填写在印尼的投资与经营背景，用于风险研判'}</p></div>`
    + `<button type="button" class="dialog-close" id="company-close" aria-label="关闭">${icon('close')}<span>关闭</span></button></header>`
    + `<form id="company-form" class="dialog-form"><div class="dialog-scroll">${groups}`
-   + `<label class="check-field"><input type="checkbox" name="allow_external" ${c.allow_external ? 'checked' : ''}><span>允许已配置的外部 AI 服务使用此公司的背景信息。</span></label><div id="company-error" role="alert"></div></div>`
+   + `<div id="company-error" role="alert"></div></div>`
    + '<div class="dialog-foot"><span class="dialog-foot-note">带 * 为必填 · 保存后用于此后提交的分析</span><button type="button" class="secondary" data-company-cancel>取消</button><button class="primary" type="submit">保存公司信息</button></div></form>';
  $('#company-close').onclick=()=>dialog.close();
  $('[data-company-cancel]').onclick = () => dialog.close();
- $('#company-form').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget,b=$('[type=submit]',f);b.disabled=true;const values=new FormData(f);const body=Object.fromEntries(values);body.allow_external=values.has('allow_external');try{await api('/companies'+(c.id?'/'+c.id:''),{method:c.id?'PUT':'POST',body});dialog.close();toast('公司信息已保存'+(c.document_id?'，知识库已同步':''));await render();}catch(err){$('#company-error').textContent=err.message;b.disabled=false;}};
+ $('#company-form').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget,b=$('[type=submit]',f);b.disabled=true;const values=new FormData(f);const body=Object.fromEntries(values);try{await api('/companies'+(c.id?'/'+c.id:''),{method:c.id?'PUT':'POST',body});dialog.close();toast('公司信息已保存'+(c.document_id?'，知识库已同步':''));await render();}catch(err){$('#company-error').textContent=err.message;b.disabled=false;}};
  dialog.showModal();
 }
 function bindCompanies(){

@@ -10,6 +10,9 @@ WorkingDirectory=/opt/renderer
 EnvironmentFile=/etc/web-renderer.env
 Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/renderer/browsers
 Environment=HOME=/opt/renderer
+Environment=TMPDIR=/run/web-renderer
+RuntimeDirectory=web-renderer
+RuntimeDirectoryMode=0700
 ExecStart=/opt/renderer/venv/bin/python /opt/renderer/web_renderer.py
 Restart=on-failure
 RestartSec=5
@@ -17,7 +20,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/opt/renderer
+ReadWritePaths=/opt/renderer /run/web-renderer
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

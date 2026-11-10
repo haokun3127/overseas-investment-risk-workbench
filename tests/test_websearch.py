@@ -85,7 +85,7 @@ def test_search_failure_does_not_auto_import(web_client,monkeypatch):
     run=process(web_client,add_source(web_client,auto_import='both',auto_analyze=True,target_company_id=make_company(web_client)))
     # Fabricated quotes are never accepted: pages stay unjudged, the run still completes, nothing is imported.
     assert run['status']=='completed' and 'AI 未给出可核验的判定' in run['error']
-    assert run['items'] and all(p['relevant'] is None and p['reason']==websearch.UNJUDGED for p in run['items'])
+    assert run['items'] and all(p['relevant'] is None and p['reason'].startswith(websearch.UNJUDGED) and '连续原文' in p['reason'] for p in run['items'])
     assert not web_client.get('/api/documents').json()['items']
     assert not web_client.get('/api/documents?kind=knowledge').json()['items']
 
@@ -111,10 +111,12 @@ def test_public_dns_and_address_validation(monkeypatch):
     monkeypatch.setattr(socket,'getaddrinfo',lambda *a,**kw:[(socket.AF_INET,socket.SOCK_STREAM,6,'',('8.8.8.8',443))])
     assert websearch.public_address('example.com',443)=='8.8.8.8'
 
-def test_authorization_cancel_edit_pause(web_client):
+def test_direct_search_cancel_edit_pause(web_client):
     c=web_client;sid=add_source(c,allow_external=False)
-    assert c.post('/api/web/runs',json={'source_id':sid}).status_code==400
-    assert c.post('/api/web/sources',json={'name':'定时','url':'https://example.com/','keywords':'政策','interval_hours':24}).status_code==400
+    run=c.post('/api/web/runs',json={'source_id':sid})
+    assert run.status_code==200
+    assert c.post('/api/web/runs/'+str(run.json()['id'])+'/cancel').status_code==200
+    assert c.post('/api/web/sources',json={'name':'定时','url':'https://example.com/','keywords':'政策','interval_hours':24}).status_code==200
     sid=add_source(c,interval_hours=24)
     rid=c.post('/api/web/runs',json={'source_id':sid}).json()['id']
     assert c.post('/api/web/runs',json={'source_id':sid}).json()['id']==rid
@@ -423,7 +425,8 @@ def test_source_batch_import_groups_toggle_delete_and_group_run(web_client,monke
     assert c.get('/api/web/sources?q=ojk').json()['total']==1
     sid=listing['items'][0]['id']
     assert c.post(f'/api/web/sources/{sid}/toggle',json={'enabled':False}).status_code==200
-    assert '停用' in c.post('/api/web/runs',json={'source_id':sid}).json()['detail']
+    assert c.post('/api/web/runs',json={'source_id':sid}).status_code==200
+    assert c.app.state.store.one('SELECT enabled FROM web_sources WHERE id=?',(sid,))['enabled']==0
     assert '没有已启用' in c.post('/api/web/runs/group',json={'category':'一、印尼国内'}).json()['detail']
     c.post(f'/api/web/sources/{sid}/toggle',json={'enabled':True})
     assert c.post('/api/web/runs/group',json={'category':'一、印尼国内'}).json()['queued']==1
@@ -653,8 +656,8 @@ def test_work_queues_use_latest_run_and_health(web_client):
     assert [x['id'] for x in c.get('/api/web/sources').json()['items']]==[b,d,a]
     assert c.get('/api/web/sources?status=bad').status_code==400
     assert c.post('/api/web/sources/'+str(d)+'/toggle',json={'enabled':False}).status_code==200
-    assert c.get('/api/web/health').json()['latest_failed']==0
-    assert c.get('/api/web/sources?status=failed').json()['total']==0
+    assert c.get('/api/web/health').json()['latest_failed']==1
+    assert c.get('/api/web/sources?status=failed').json()['total']==1
 
 
 def test_history_knowledge_is_separate_from_current_relevance(web_client,monkeypatch):

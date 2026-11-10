@@ -17,16 +17,19 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from .access import company_of, is_admin, require_admin, session_company
 from .config import ROOT, Settings
-from . import companies, model
+from . import companies, model, countermeasures
 from .demo import seed
 from .enrich import Enricher
 from .ingest import insert_document, parse_file
 from .jobs import Worker
+from .vectors import Indexer, ensure as ensure_vectors, status as vector_status
 from .retrieval import annotate_hits, kind_label, retrieve
-from .store import DEFAULT_RULES, Store, now
+from .store import DEFAULT_RULES, LEVEL_LABELS, LEVEL_ORDER, LEVELS, Store, now
 from .websearch import Collector, initialize as initialize_websearch, router as websearch_router
 from . import websearch
+from .publication import absence_note
 from .evidence import router as evidence_router
+from .consultation import router as consultation_router
 
 class Credentials(BaseModel):
     password: str = Field(min_length=10,max_length=128)
@@ -59,7 +62,7 @@ class Record(BaseModel):
     source: str = ''
     url: str = ''
     kind: str = 'event'
-    allow_external: bool = False
+    allow_external: bool = True
 
 class JobRequest(BaseModel):
     document_ids: list[int] = Field(min_length=1,max_length=100)
@@ -67,9 +70,6 @@ class JobRequest(BaseModel):
 class Review(BaseModel):
     status: str
     note: str = Field(default='',max_length=2000)
-
-class DocumentPolicy(BaseModel):
-    allow_external: bool
 
 def password_hash(password,salt):
     return hashlib.pbkdf2_hmac('sha256',password.encode(),bytes.fromhex(salt),300000).hex()
@@ -84,6 +84,8 @@ def create_app(settings=None, run_worker=True):
     initialize_websearch(store)
     collector=Collector(store,settings)
     enricher=Enricher(store,settings)
+    ensure_vectors(store)
+    indexer=Indexer(store,settings)
     login_attempts={}
     @asynccontextmanager
     async def lifespan(app):
@@ -91,17 +93,21 @@ def create_app(settings=None, run_worker=True):
             worker.start()
             collector.start()
             enricher.start()
+            indexer.start()
         yield
         await worker.stop()
         await collector.stop()
         await enricher.stop()
+        await indexer.stop()
     app=FastAPI(title='海外投资风险工作台',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.store=store; app.state.worker=worker; app.state.settings=settings
     app.state.collector=collector
     app.state.enricher=enricher
+    app.state.indexer=indexer
     app.include_router(websearch_router(store,settings))
     app.include_router(companies.router(store))
     app.include_router(evidence_router(store,settings))
+    app.include_router(consultation_router(store,settings))
 
     @app.middleware('http')
     async def guard(request,call_next):
@@ -154,7 +160,7 @@ def create_app(settings=None, run_worker=True):
 
     @app.get('/api/release')
     def release():
-        return JSONResponse({'version':'20261024-header1'},headers={'Cache-Control':'no-store'})
+        return JSONResponse({'version':'20261109-consultation'},headers={'Cache-Control':'no-store'})
 
     @app.get('/api/health')
     def health(): return {'status':'ok'}
@@ -218,7 +224,7 @@ def create_app(settings=None, run_worker=True):
         if len(uname)<3 or uname.lower()=='admin':
             raise ValueError('登录账号须为3至60个字符，且不能使用保留名称 admin。')
         profile={k:getattr(data,k).strip() if isinstance(getattr(data,k),str) else getattr(data,k) for k in companies.LABELS}
-        profile['allow_external']=bool(data.allow_external)
+        profile['allow_external']=True
         if not profile['name']:
             raise ValueError('请填写公司名称。')
         salt=secrets.token_hex(16)
@@ -276,7 +282,7 @@ def create_app(settings=None, run_worker=True):
                 'store_responses':settings.model_store if can_manage else None,
                 'role':'admin' if can_manage else 'company','can_manage':can_manage,
                 'rules':store.setting('rules'),
-                'retrieval':'服务端 BM25 文本检索：原文加入库时生成的中文摘要和关键词 + 中印英跨语言法规术语扩展','prompt_version':'risk-evidence-v1'}
+                'retrieval':'混合检索：向量相似度与 BM25；向量未建好时只用 BM25。中文摘要、关键词和中印英对照词仍参与关键词检索','prompt_version':model.PROMPT_VERSION}
 
     @app.put('/api/rules')
     async def rules(request:Request):
@@ -285,10 +291,10 @@ def create_app(settings=None, run_worker=True):
         if not isinstance(value,dict) or set(value)!= {'version','confirmed','categories','levels','notes'}:
             raise ValueError('规则字段须包含 version、confirmed、categories、levels、notes。')
         cats=value['categories']
-        if not isinstance(cats,list) or not 1<=len(cats)<=30 or any(not isinstance(c,str) or not c.strip() or len(c)>80 for c in cats) or len(set(cats))!=len(cats):
-            raise ValueError('分类须为1至30个不重复的名称。')
-        if not isinstance(value['levels'],dict) or set(value['levels'])!={'red','orange','yellow'} or any(not isinstance(v,str) or not v.strip() or len(v)>2000 for v in value['levels'].values()):
-            raise ValueError('请提供 red、orange、yellow 三个等级的判断标准。')
+        if not isinstance(cats,list) or not 1<=len(cats)<=80 or any(not isinstance(c,str) or not c.strip() or len(c)>80 for c in cats) or len(set(cats))!=len(cats):
+            raise ValueError('分类须为1至80个不重复的名称。')
+        if not isinstance(value['levels'],dict) or set(value['levels'])!=set(LEVELS) or any(not isinstance(v,str) or not v.strip() or len(v)>2000 for v in value['levels'].values()):
+            raise ValueError('请提供 I–V 级（lv1–lv5）五个等级的判断标准。')
         if type(value['confirmed']) is not bool or not isinstance(value['version'],str) or not 1<=len(value['version'])<=60 or not isinstance(value['notes'],str) or len(value['notes'])>5000:
             raise ValueError('规则版本、确认状态或说明格式不正确。')
         store.set_setting('rules',value); store.audit('rules_updated',value['version'])
@@ -317,7 +323,7 @@ def create_app(settings=None, run_worker=True):
         return {'id':doc_id,'created':created}
 
     @app.post('/api/import')
-    async def upload(request:Request,file:UploadFile=File(...),kind:str=Form('event'),allow_external:bool=Form(False)):
+    async def upload(request:Request,file:UploadFile=File(...),kind:str=Form('event'),allow_external:bool=Form(True)):
         if kind not in ('event','knowledge'): raise ValueError('资料用途无效。')
         cid=getattr(request.state,'company_id',None)
         content=await file.read(settings.max_upload+1)
@@ -367,15 +373,13 @@ def create_app(settings=None, run_worker=True):
             else:
                 where+=' AND (d.company_id=? OR (d.company_id IS NULL AND d.id NOT IN (SELECT document_id FROM companies WHERE document_id IS NOT NULL)))'
                 args.append(cid)
-        if policy in ('local','external'):
-            where+=' AND d.allow_external=?'; args.append(int(policy=='external'))
         if status=='unanalysed':
             where+=' AND NOT EXISTS(SELECT 1 FROM analyses a WHERE a.document_id=d.id)'
         elif status in ('queued','running','failed','completed'):
             where+=' AND (SELECT status FROM jobs j WHERE j.document_id=d.id ORDER BY j.id DESC LIMIT 1)=?'; args.append(status)
         count=store.one('SELECT COUNT(*) n FROM documents d WHERE '+where,args)['n']
         order="d.date='',d.date DESC,d.id DESC" if sort=='date' else 'd.id DESC'
-        rows=store.rows("""SELECT d.id,d.title,d.date,d.date_source,d.archived_at,d.fetched_at,d.source,d.url,d.kind,d.allow_external,d.demo,d.created_at,length(d.body) characters,d.zh_summary,d.zh_keywords,d.zh_state,d.company_id,d.filename,d.file_path!='' has_file,d.quarantined_at,d.quarantine_reason,
+        rows=store.rows("""SELECT d.id,d.title,d.date,d.date_source,d.archived_at,d.fetched_at,d.source,d.url,d.kind,d.allow_external,d.demo,d.created_at,length(d.body) characters,d.zh_summary,d.zh_keywords,d.zh_state,d.company_id,d.filename,d.file_path!='' has_file,substr(d.body,1,3000) date_context,d.quarantined_at,d.quarantine_reason,
             (SELECT id FROM jobs WHERE document_id=d.id ORDER BY id DESC LIMIT 1) job_id,
             (SELECT status FROM jobs WHERE document_id=d.id ORDER BY id DESC LIMIT 1) job_status,
             (SELECT progress FROM jobs WHERE document_id=d.id ORDER BY id DESC LIMIT 1) job_progress,
@@ -388,6 +392,8 @@ def create_app(settings=None, run_worker=True):
             row['editable']=cid is None or row['company_id']==cid
             row['kind_label']=kind_label(store,row)
             row.pop('has_file')
+            row['date_note']=absence_note(row)
+            row.pop('date_context',None)
         return {'items':rows,'total':count,'page':page,'page_size':30}
 
     @app.get('/api/documents/{doc_id}')
@@ -396,6 +402,7 @@ def create_app(settings=None, run_worker=True):
         doc=store.one('SELECT * FROM documents WHERE id=?',(doc_id,))
         if not doc or not _can_read_doc(doc,cid): raise HTTPException(404,'资料不存在。')
         doc['kind_label']=kind_label(store,doc)
+        doc['date_note']=absence_note(doc)
         doc.pop('file_path'); doc.pop('digest')
         doc['editable']=cid is None or doc.get('company_id')==cid
         doc['chunks']=store.rows('SELECT id,locator,text FROM chunks WHERE document_id=? ORDER BY id',(doc_id,))
@@ -405,22 +412,6 @@ def create_app(settings=None, run_worker=True):
             row['rule_version']=json.loads(row.pop('rules_json')).get('version','')
             row['events']=store.rows('SELECT id,title FROM events WHERE analysis_id=?',(row['id'],))
         return doc
-
-    @app.patch('/api/documents/{doc_id}/policy')
-    def document_policy(doc_id:int,data:DocumentPolicy,request:Request):
-        cid=getattr(request.state,'company_id',None)
-        doc=store.one('SELECT id,company_id,quarantined_at FROM documents WHERE id=?',(doc_id,))
-        if not doc or (cid is not None and doc.get('company_id')!=cid):
-            raise HTTPException(404,'资料不存在或无权修改。')
-        if doc['quarantined_at']:
-            raise HTTPException(409,'资料已隔离待核实，不能修改外发授权。')
-        with store.db() as db:
-            if db.execute("SELECT id FROM jobs WHERE status IN ('queued','running') AND (document_id=? OR EXISTS(SELECT 1 FROM json_each(jobs.supplements_json) s WHERE json_extract(s.value,'$.document_id')=?))",(doc_id,doc_id)).fetchone():
-                raise HTTPException(409,'资料有待处理任务，请等待任务结束后修改授权范围。')
-            if db.execute('UPDATE documents SET allow_external=? WHERE id=? AND demo=0',(int(data.allow_external),doc_id)).rowcount==0:
-                raise HTTPException(404,'资料不存在或属于不可修改的演示资料。')
-        store.audit('document_policy_changed',f'document={doc_id}, allow_external={data.allow_external}',company_id=doc['company_id'])
-        return {'ok':True}
 
     @app.get('/api/documents/{doc_id}/file')
     def original(doc_id:int,request:Request):
@@ -452,9 +443,8 @@ def create_app(settings=None, run_worker=True):
                 doc=db.execute('SELECT * FROM documents WHERE id=?',(doc_id,)).fetchone()
                 if not doc or doc['kind']!='event' or (cid is not None and doc['company_id']!=cid):
                     raise ValueError(f'资料 {doc_id} 不是当前公司的待分析资料。')
-                if doc['demo']: raise ValueError('内置演示资料不进入真实分析，请导入新的测试资料。')
+                if doc['demo']: raise ValueError('演示资料不能用于风险分析，请导入业务资料。')
                 if doc['quarantined_at']: raise ValueError(f'资料 {doc_id} 已隔离，不能进入分析。')
-                if not doc['allow_external']: raise ValueError(f'资料 {doc_id} 未获准发送外部模型，请在原文页核实并修改授权范围。')
                 checked[doc_id]=doc
             result=[]
             for doc_id in ids:
@@ -525,9 +515,8 @@ def create_app(settings=None, run_worker=True):
                 if doc['kind']!='event': reasons.append('参考资料不能直接启动风险分析')
                 if doc['demo']: reasons.append('虚构演示资料不能进入真实分析')
                 if doc['quarantined_at']: reasons.append('资料已隔离（待核实）')
-                if not doc['allow_external']: reasons.append('尚未授权外部分析')
                 linked=store.rows('SELECT d.allow_external,d.quarantined_at FROM document_evidence e JOIN documents d ON d.id=e.supplement_id WHERE e.document_id=?',(doc_id,))
-                if any(not d['allow_external'] or d['quarantined_at'] for d in linked): reasons.append('部分补充材料尚未授权或已隔离，请到待补证入口处理')
+                if any(d['quarantined_at'] for d in linked): reasons.append('部分补充材料已隔离，请到待补证入口处理')
             active=store.one("SELECT id FROM jobs WHERE document_id=? AND status IN ('queued','running')",(doc_id,)) if doc else None
             owner=doc.get('company_id') if doc else None
             company=companies.current(store,owner) if owner else None
@@ -548,7 +537,12 @@ def create_app(settings=None, run_worker=True):
                 except ValueError: raise ValueError('筛选日期须为 YYYY-MM-DD。')
         if date_from and date_to and date_from>date_to: raise ValueError('开始日期不能晚于结束日期。')
         if demo not in ('all','real','demo'): raise ValueError('数据范围无效。')
-        if level and level not in ('red','orange','yellow'): raise ValueError('风险等级无效。')
+        legacy_clause=''
+        if level=='legacy':
+            legacy_clause="e.level IN ('red','orange','yellow')"
+            level=''
+        elif level and level not in LEVEL_LABELS:
+            raise ValueError('风险等级无效。')
         if review and review not in ('pending','accepted','needs_change'): raise ValueError('复核状态无效。')
         conditions=[
             'a.id=(SELECT a2.id FROM analyses a2 WHERE a2.document_id=a.document_id ORDER BY version DESC LIMIT 1)',
@@ -558,6 +552,8 @@ def create_app(settings=None, run_worker=True):
         if company_id is not None:
             conditions.append('d.company_id=?')
             args.append(company_id)
+        if legacy_clause:
+            conditions.append(legacy_clause)
         for value,sql in [(q,'(e.title LIKE ? OR e.summary LIKE ?)'),(level,'e.level=?'),(category,'e.category=?'),(review,'e.review_status=?'),(date_from,'d.date>=?'),(date_to,'d.date<=?')]:
             if value:
                 conditions.append(sql)
@@ -574,6 +570,17 @@ def create_app(settings=None, run_worker=True):
         rows=store.rows('SELECT e.id,e.title,e.category,e.level,e.summary,e.review_status,d.date,d.date_source,d.source,d.demo,d.id document_id,a.model,a.mode'+base+' ORDER BY d.date DESC,e.id DESC LIMIT 20 OFFSET ?',args+[(max(page,1)-1)*20])
         return {'items':rows,'total':total,'page':max(page,1),'page_size':20}
 
+    @app.get('/api/countermeasures')
+    def countermeasure_library(request:Request):
+        return countermeasures.load_library(store.directory)
+
+    @app.get('/api/countermeasures/source')
+    def countermeasure_source(request:Request):
+        path=countermeasures.source_file(store.directory)
+        if path is None:
+            raise HTTPException(503,countermeasures.UNAVAILABLE)
+        return FileResponse(path,media_type='application/msword',filename=countermeasures.SOURCE_FILENAME)
+
     @app.get('/api/events/{event_id}')
     def event(event_id:int,request:Request):
         cid=getattr(request.state,'company_id',None)
@@ -584,6 +591,7 @@ def create_app(settings=None, run_worker=True):
         for name in ('evidence','rules','usage','result'): row[name]=json.loads(row.pop(name+'_json'))
         row['is_latest']=store.one('SELECT id FROM analyses WHERE document_id=? ORDER BY version DESC LIMIT 1',(row['document_id'],))['id']==row['analysis_id']
         row['review_history']=store.rows('SELECT status,note,created_at FROM review_history WHERE event_id=? ORDER BY id DESC',(event_id,))
+        row['countermeasures']=countermeasures.for_level(countermeasures.load_library(store.directory),row['level'])
         return row
 
     @app.put('/api/events/{event_id}/review')
@@ -661,7 +669,7 @@ def create_app(settings=None, run_worker=True):
             value=str(value or '')
             return "'"+value if value.lstrip().startswith(('=','+','-','@','\t','\r')) else value
         for row in rows:
-            writer.writerow([safe(v) for v in [row['id'],row['title'],{'red':'高风险','orange':'中风险','yellow':'一般关注'}.get(row['level'],row['level']),row['category'],row['summary'],row['impact'],row['recommendation'],{'pending':'待复核','accepted':'已认可','needs_change':'需修正'}[row['review_status']],row['review_note'],row['date'],row['source'],row['url'],row['version'],'虚构演示' if row['demo'] else '非演示数据', '\n'.join(r.get('quote','') for r in json.loads(row['evidence_json'])),row['date_source']]])
+            writer.writerow([safe(v) for v in [row['id'],row['title'],LEVEL_LABELS.get(row['level'],row['level']),row['category'],row['summary'],row['impact'],row['recommendation'],{'pending':'待复核','accepted':'已认可','needs_change':'需修正'}[row['review_status']],row['review_note'],row['date'],row['source'],row['url'],row['version'],'虚构演示' if row['demo'] else '非演示数据', '\n'.join(r.get('quote','') for r in json.loads(row['evidence_json'])),row['date_source']]])
         store.audit('events_exported',f'count={len(rows)}, scope={demo}, company={cid}',company_id=cid)
         return Response('﻿'+output.getvalue(),media_type='text/csv',headers={'Content-Disposition':'attachment; filename="risk-events.csv"'})
 
@@ -697,12 +705,14 @@ def create_app(settings=None, run_worker=True):
         base,args=events_query(demo,q,level,category,review,date_from,date_to,company_id=cid)
         total=store.one('SELECT COUNT(*) n'+base,args)['n']
         if total>500: raise HTTPException(400,'当前匹配超过500条，请缩小日期或分类范围后生成简报；完整台账可使用 CSV 导出。')
-        items=store.rows("SELECT e.*,d.date,d.date_source,d.source,d.url,d.demo,a.version,a.model,a.mode,a.rules_json,json_extract(c.profile_json,'$.name') company_name"+base+" ORDER BY CASE e.level WHEN 'red' THEN 0 WHEN 'orange' THEN 1 ELSE 2 END,d.date DESC,e.id DESC",args)
+        level_case=' '.join(f"WHEN '{key}' THEN {index}" for index,key in enumerate(LEVEL_ORDER))
+        items=store.rows("SELECT e.*,d.date,d.date_source,d.source,d.url,d.demo,a.version,a.model,a.mode,a.rules_json,json_extract(c.profile_json,'$.name') company_name"+base+f" ORDER BY CASE e.level {level_case} ELSE {len(LEVEL_ORDER)} END,d.date DESC,e.id DESC",args)
         for item in items:
             item['evidence']=json.loads(item.pop('evidence_json'))
             item['rule_version']=json.loads(item.pop('rules_json'))['version']
         company=companies.current(store,cid) if cid is not None else None
-        return {'generated_at':now(),'total':total,'items':items,'scope':{
+        reference=countermeasures.report_reference(countermeasures.load_library(store.directory),[item['level'] for item in items])
+        return {'generated_at':now(),'total':total,'items':items,'countermeasures':reference,'scope':{
             'q':q,'level':level,'category':category,'review':review,'demo':demo,'date_from':date_from,'date_to':date_to,
             'company':{'all':cid is None,'name':company['name'] if company else '','count':store.one('SELECT COUNT(*) n FROM companies')['n'] if cid is None else 1},
         }}
@@ -710,10 +720,12 @@ def create_app(settings=None, run_worker=True):
     def last_backup():
         if not settings.backup_dir:return None
         marks=sorted(Path(settings.backup_dir).glob('*/backup.json'),key=lambda p:p.parent.name)
-        if not marks:return {'created_at':None,'count':0}
-        try:created=json.loads(marks[-1].read_text(encoding='utf-8'))['created_at']
+        try:created=json.loads(marks[-1].read_text(encoding='utf-8'))['created_at'] if marks else None
         except (OSError,ValueError,KeyError):created=None
-        return {'created_at':created,'count':len(marks)}
+        try:status=json.loads((Path(settings.backup_dir)/'status.json').read_text(encoding='utf-8'))
+        except (OSError,ValueError):status={}
+        return {'created_at':created,'count':len(marks),'state':status.get('state','unknown'),
+                'checked_at':status.get('checked_at'),'error':status.get('error','')}
 
     def model_error():
         rows=[r for r in (store.one("SELECT error,finished_at at FROM jobs WHERE status='failed' AND error!='' ORDER BY id DESC LIMIT 1"),
@@ -731,8 +743,9 @@ def create_app(settings=None, run_worker=True):
                 'queue':store.rows('SELECT status,COUNT(*) count FROM jobs GROUP BY status'),
                 'worker_enabled':run_worker,'backup':last_backup(),
                 'fetch_proxy':bool(websearch.FETCH_PROXY),'renderer':bool(websearch.RENDERER),
-                'enrich_pending':store.one("SELECT COUNT(*) n FROM documents WHERE kind='knowledge' AND demo=0 AND quarantined_at IS NULL AND allow_external=1 AND zh_state=''")['n'],
+                'enrich_pending':store.one("SELECT COUNT(*) n FROM documents WHERE kind='knowledge' AND demo=0 AND quarantined_at IS NULL AND zh_state=''")['n'],
                 'enrich_failed':store.one("SELECT COUNT(*) n FROM documents WHERE kind='knowledge' AND quarantined_at IS NULL AND zh_state='failed'")['n'],
+                'vectors':vector_status(store),
                 'model_error':model_error(),'last_analysis':store.one('SELECT created_at,model,mode FROM analyses ORDER BY id DESC LIMIT 1')}
 
     app.mount('/static',StaticFiles(directory=ROOT/'web'),name='static')

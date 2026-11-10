@@ -47,6 +47,11 @@ body[data-route=overview] .network-panel .signal-canvas{min-height:250px;}
 .advanced-filters[open] .advanced-fields{padding-top:8px;}
 .release-notice{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);width:max-content;max-width:calc(100% - 24px);z-index:100;display:flex;gap:12px;align-items:center;padding:12px 16px;background:var(--paper);border:1px solid var(--line-strong);border-radius:12px;box-shadow:var(--elev-2);font-size:13px;}
 .release-notice>span{max-width:46ch;}
+@media(max-width:700px){
+ body[data-route=websites] #main button,
+ body[data-route=websites] #main .web-view-toggle a,
+ body[data-route=websites] #main .web-view-toggle button{min-height:44px;min-width:44px;}
+}
 @media(min-width:1001px){
  .verification-workspace.has-inspection{display:grid;grid-template-columns:minmax(0,1fr) minmax(390px,53%);align-items:start;}
  .verification-workspace.has-inspection .inspection-panel:not([hidden]){position:sticky;display:flex;height:calc(100dvh - var(--shell-clearance) - 16px);max-height:none;overflow:hidden;padding-bottom:0;}

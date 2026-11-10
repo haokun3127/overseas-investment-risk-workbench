@@ -1,0 +1,29 @@
+.consultation-panel { max-width: 980px; }
+.consultation-panel .consultation-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.consultation-heading h2 { margin: 0 0 4px; }
+.consultation-content { min-width: 0; }
+.consultation-transcript { display: grid; gap: 16px; margin-bottom: 20px; }
+.consultation-starter, .consultation-answer, .consultation-question { padding: 16px; border-radius: 12px; overflow-wrap: anywhere; }
+.consultation-starter, .consultation-question { background: #edf3fa; color: #192d47; }
+.consultation-starter h3 { margin: 0 0 6px; }
+.consultation-examples, .consultation-actions, .consultation-source-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.consultation-examples button { text-align: left; white-space: normal; }
+.consultation-turn { display: grid; gap: 8px; min-width: 0; }
+.consultation-question { justify-self: end; max-width: min(100%, 46rem); }
+.consultation-answer { background: #fff; border: 1px solid #dce4ef; }
+.consultation-answer > span, .consultation-question > span { color: #415975; font-size: .85rem; font-weight: 600; }
+.consultation-answer p, .consultation-question p, .consultation-sources blockquote { margin: 6px 0; white-space: pre-wrap; }
+.consultation-marker { color: #194fa0; font-weight: 600; }
+.consultation-sources { margin-top: 12px; border-top: 1px solid #dce4ef; padding-top: 10px; }
+.consultation-sources summary { cursor: pointer; color: #304e77; }
+.consultation-sources ol { padding: 0; margin: 6px 0 0; list-style: none; }
+.consultation-sources li { padding: 8px 0; border-bottom: 1px solid #e7edf4; }
+.consultation-sources blockquote { padding: 4px 10px; border-left: 3px solid #b5cbea; color: #354c68; }
+.consultation-form textarea { width: 100%; min-height: 90px; resize: vertical; }
+.consultation-actions { justify-content: space-between; margin-top: 10px; }
+.consultation-status { margin: 6px 0 0; color: #304e77; }
+.consultation-status:empty { display: none; }
+@media (max-width: 560px) {
+  .consultation-question, .consultation-answer, .consultation-starter { padding: 12px; }
+  .consultation-actions button { margin-left: auto; }
+}

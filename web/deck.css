@@ -30,9 +30,9 @@
 .scope-tip .demo-note { display:block; margin:0; color:var(--text-2); font-size:13px; line-height:1.8; }
 .page-overview .setup-alert { margin:0 0 16px; position:relative; z-index:2; }
 
-/* ── KPI sheet: one floating paper strip, four cells split by hairlines ── */
+/* ── KPI sheet: one floating paper strip, six cells (total + I–V) split by hairlines ── */
 .page-overview>.stats.kpi-strip,.kpi-strip {
-  position:relative; z-index:1; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); min-height:132px; margin:0 0 16px; overflow:hidden;
+  position:relative; z-index:1; display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); min-height:132px; margin:0 0 16px; overflow:hidden;
   border:1px solid rgb(255 255 255 / 60%); border-radius:var(--r-lg); background:var(--paper); box-shadow:var(--elev-2);
 }
 .kpi-strip .stat { position:relative; display:flex; flex-direction:column; min-width:0; padding:18px 22px 22px; border:0; border-right:1px solid var(--line); background:transparent; color:var(--text); transition:background-color var(--d-1) ease; }
@@ -63,10 +63,6 @@
 .stat.yellow .stat-share>span { background:var(--yellow); }
 .is-revealing .stat-share>span { animation:share-in 900ms var(--ease-out) 200ms both; }
 @keyframes share-in { from { transform:scaleX(0); } }
-
-/* KPI hairlines continue the board below: total / high / medium over the map, low over the fixed rail.
-   The rail column is 1px narrower because the sheet's own border sits outside its grid. */
-.page-overview>.stats.kpi-strip { grid-template-columns:repeat(3,minmax(0,1fr)) calc(var(--rail-w) - 1px); }
 
 /* ── Bento: map on the left, fixed-width rail on the right ── */
 .overview-bento.analysis-board { display:grid; grid-template-columns:minmax(0,1fr) var(--rail-w); grid-template-rows:auto auto; grid-template-areas:"map severity" "map review"; gap:16px; margin:0 0 16px; align-items:stretch; }
@@ -263,16 +259,12 @@
   .scope-popover { width:min(680px,calc(100vw - var(--shell-side) - 64px)); }
 }
 @media (max-width:1100px) {
-  .page-overview>.stats.kpi-strip { grid-template-columns:repeat(4,minmax(0,1fr)); }
   .overview-bento.analysis-board { grid-template-columns:1fr 1fr; grid-template-rows:auto; grid-template-areas:"map map" "severity review"; }
   .overview-bento.is-empty { grid-template-columns:1fr; grid-template-areas:"map" "rail"; }
   .overview-bento.is-empty .workspace-checks { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); column-gap:24px; }
   .overview-bento.is-empty .workspace-checks a:nth-last-child(2) { border-bottom:0; }
 }
 @media (max-width:900px) {
-  .page-overview>.stats.kpi-strip,.kpi-strip { grid-template-columns:repeat(2,minmax(0,1fr)); }
-  .kpi-strip .stat:nth-child(2) { border-right:0; }
-  .kpi-strip .stat:nth-child(-n+2) { border-bottom:1px solid var(--line); }
   .signal-standby { grid-template-columns:1fr; }
   .standby-orbit { display:none; }
 }

@@ -62,7 +62,10 @@ def test_runtime_reports_latest_backup(tmp_path):
     settings=Settings(data_dir=tmp_path/'data',backup_dir=str(tmp_path/'backups'),model_base_url='https://model.example/v1',model_name='m',model_api_key='k')
     with TestClient(create_app(settings,run_worker=False),headers=HEADERS) as c:
         c.post('/api/auth/setup',json={'password':'test-password-2026'})
-        assert c.get('/api/runtime').json()['backup']=={'created_at':None,'count':0}
+        assert c.get('/api/runtime').json()['backup']=={'created_at':None,'count':0,'state':'unknown','checked_at':None,'error':''}
         for name,when in [('20261018-033000','2026-10-18T03:30:00'),('20261019-033000','2026-10-19T03:30:00')]:
             (tmp_path/'backups'/name).mkdir(parents=True);(tmp_path/'backups'/name/'backup.json').write_text(json.dumps({'created_at':when}))
-        assert c.get('/api/runtime').json()['backup']=={'created_at':'2026-10-19T03:30:00','count':2}
+        assert c.get('/api/runtime').json()['backup']=={'created_at':'2026-10-19T03:30:00','count':2,'state':'unknown','checked_at':None,'error':''}
+        (tmp_path/'backups/status.json').write_text(json.dumps({'state':'failed','checked_at':'2026-10-20T03:30:00+00:00','error':'disk full'}))
+        status=c.get('/api/runtime').json()['backup']
+        assert status['state']=='failed' and status['error']=='disk full' and status['count']==2

@@ -209,7 +209,7 @@ def analysed_event(client, monkeypatch, title='园区核查通知'):
     async def fake(_settings, payload, **_kwargs):
         ref = [r['reference'] for r in payload['references'] if r['reference'].startswith('S')][0]
         return {'decision': 'risk', 'reason': '测试', 'events': [{
-            'title': f'{title}风险', 'category': '政策与监管', 'level': 'red', 'summary': '逾期暂停采购',
+            'title': f'{title}风险', 'category': '准入审批限制风险', 'level': 'lv1', 'summary': '逾期暂停采购',
             'impact': '影响生产', 'recommendation': '按期提交',
             'evidence': [{'reference': ref, 'quote': '园区企业需在月底前提交年度核查材料', 'reason': '直接说明'}]}]}, {}
     monkeypatch.setattr('app.jobs.model.call_model', fake)
@@ -264,7 +264,7 @@ def test_quarantine_dry_run_mismatch_and_apply(client, monkeypatch, tmp_path):
     opened = client.get(f'/api/events/{event}')
     assert opened.status_code == 200 and opened.json()['quarantined_at']
     assert client.delete(f'/api/documents/{doc}').status_code == 409
-    assert client.patch(f'/api/documents/{doc}/policy', json={'allow_external': True}).status_code == 409
+    assert client.patch(f'/api/documents/{doc}/policy', json={'allow_external': True}).status_code == 404
     listed = {r['id']: r for r in client.get('/api/documents?kind=event').json()['items']}
     assert listed[doc]['quarantined_at'] and keep_doc in listed
 

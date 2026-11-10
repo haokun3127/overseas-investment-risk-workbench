@@ -33,7 +33,7 @@ def test_profile_update_sync_and_company_retrieval(client):
     assert c.put('/api/companies/999',json=a).status_code==404
     assert c.post('/api/companies',json={'name':'   '}).status_code==400
 
-def test_job_keeps_company_snapshot_and_external_consent(client,monkeypatch):
+def test_job_keeps_company_snapshot_without_consent_gate(client,monkeypatch):
     c=client;store=c.app.state.store
     a=c.post('/api/companies',json={'name':'甲公司私密','industry':'私密行业','allow_external':True}).json()['id']
     doc=c.post('/api/documents',json={'title':'资料测试','body':'公开正文用于风险分析测试，包含供应链相关信息。','allow_external':True}).json()['id']
@@ -49,6 +49,6 @@ def test_job_keeps_company_snapshot_and_external_consent(client,monkeypatch):
     assert captured[0]['scope']['industry']=='私密行业'
     jid=c.post('/api/jobs',json={'document_ids':[doc]}).json()['items'][0]['id']
     asyncio.run(c.app.state.worker.process(store.one('SELECT * FROM jobs WHERE id=?',(jid,))))
-    assert captured[-1]['company']=={}
-    assert captured[-1]['scope']['industry']=='未指定行业'
+    assert captured[-1]['company']['name']=='乙公司'
+    assert captured[-1]['scope']['industry']=='电子'
     assert store.one('SELECT status FROM jobs WHERE id=?',(jid,))['status']=='completed'
