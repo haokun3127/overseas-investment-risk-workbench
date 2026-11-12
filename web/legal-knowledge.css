@@ -1,0 +1,31 @@
+.legal-fields { margin-block-end: 16px; }
+.legal-search { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.legal-search > .field { flex: 1 1 160px; min-width: 0; }
+.legal-search > .field:first-child { flex-basis: 260px; }
+.legal-search input, .legal-search select { width: 100%; min-width: 0; }
+.legal-metadata { margin-block: 24px; padding-block: 16px; border-block: 1px solid var(--line); overflow-wrap: anywhere; }
+.legal-metadata h3 { margin-block: 0 12px; }
+.legal-editor { margin-block-start: 16px; }
+.legal-editor summary { cursor: pointer; color: var(--text); padding-block: 8px; }
+.legal-editor form { margin-block-start: 12px; }
+.legal-editor textarea { width: 100%; }
+.legal-metadata .full { grid-column: 1 / -1; }
+.consultation-answer h3 { margin-block: 24px 8px; font-size: 16px; }
+.consultation-mode { max-width: 260px; margin-block-end: 12px; }
+.consultation-answer .report-gaps { margin-block-start: 24px; padding-block-start: 12px; border-top: 1px solid var(--line); }
+@media (max-width: 700px) {
+  .legal-search { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .legal-fields, .legal-editor .form-grid { grid-template-columns: minmax(0, 1fr); }
+  .legal-search select, .legal-editor input, .legal-editor select, .legal-editor textarea { font-size: 16px; min-height: 44px; }
+}
+@media print {
+  body.print-consultation > :not(#shell) { display: none !important; }
+  body.print-consultation #shell, body.print-consultation .app-body, body.print-consultation #main { display: block !important; margin: 0 !important; padding: 0 !important; width: auto !important; }
+  body.print-consultation .sidebar, body.print-consultation .topbar,
+  body.print-consultation .consultation-form, body.print-consultation .consultation-heading,
+  body.print-consultation .page-heading, body.print-consultation .consultation-turn { display: none !important; }
+  body.print-consultation .consultation-turn.print-selected { display: block !important; }
+  body.print-consultation .consultation-turn.print-selected button { display: none !important; }
+  body.print-consultation .consultation-turn.print-selected .actions { display: none !important; }
+  body.print-consultation .consultation-panel, body.print-consultation .consultation-content, body.print-consultation .consultation-transcript { border: 0; box-shadow: none; max-height: none; overflow: visible; padding: 0; }
+}

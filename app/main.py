@@ -30,6 +30,11 @@ from . import websearch
 from .publication import absence_note
 from .evidence import router as evidence_router
 from .consultation import router as consultation_router
+from . import legal_knowledge as legal
+from .meeting import VERSION, TARGET_LEVELS, current_rules, effective_decision_sql
+from .event_management import router as event_management_router
+from .document_maintenance import router as document_maintenance_router
+from .presentation import clean_reference, clean_summary, clean_preparation_markers, clean_model_text, clean_result, rule_label
 
 class Credentials(BaseModel):
     password: str = Field(min_length=10,max_length=128)
@@ -55,6 +60,11 @@ class CompanyRegister(BaseModel):
     notes: str = Field(default='',max_length=3000)
     allow_external: bool = True
 
+class CompanyAccount(BaseModel):
+    username: str = Field(min_length=3,max_length=60)
+    password: str = Field(min_length=8,max_length=128)
+    company_id: int = Field(gt=0)
+
 class Record(BaseModel):
     title: str
     body: str
@@ -63,6 +73,11 @@ class Record(BaseModel):
     url: str = ''
     kind: str = 'event'
     allow_external: bool = True
+    legal_metadata: dict = Field(default_factory=dict)
+
+class LegalMetadataUpdate(BaseModel):
+    revision: int = Field(ge=0)
+    metadata: dict
 
 class JobRequest(BaseModel):
     document_ids: list[int] = Field(min_length=1,max_length=100)
@@ -70,6 +85,8 @@ class JobRequest(BaseModel):
 class Review(BaseModel):
     status: str
     note: str = Field(default='',max_length=2000)
+    level: str | None = None
+    revision: int | None = Field(default=None,ge=0)
 
 def password_hash(password,salt):
     return hashlib.pbkdf2_hmac('sha256',password.encode(),bytes.fromhex(salt),300000).hex()
@@ -108,6 +125,10 @@ def create_app(settings=None, run_worker=True):
     app.include_router(companies.router(store))
     app.include_router(evidence_router(store,settings))
     app.include_router(consultation_router(store,settings))
+    app.include_router(event_management_router(store))
+    app.include_router(document_maintenance_router(store))
+    from .drafting import router as drafting_router
+    app.include_router(drafting_router(store,settings))
 
     @app.middleware('http')
     async def guard(request,call_next):
@@ -130,7 +151,7 @@ def create_app(settings=None, run_worker=True):
                     return JSONResponse({'detail':'上传内容超过10MB限制。'},status_code=413)
             except ValueError:
                 return JSONResponse({'detail':'无效请求长度。'},status_code=400)
-        public={'/api/auth/status','/api/auth/setup','/api/auth/login','/api/auth/register','/api/health','/api/release'}
+        public={'/api/auth/status','/api/auth/setup','/api/auth/login','/api/health','/api/release'}
         if path.startswith('/api/') and path not in public:
             token=request.cookies.get(settings.session_cookie_name,'')
             key=hashlib.sha256(token.encode()).hexdigest()
@@ -147,6 +168,11 @@ def create_app(settings=None, run_worker=True):
             active_id = sess.get('active_company')
             if active_id and store.one('SELECT id FROM companies WHERE id=?',(active_id,)):
                 request.state.active_company=active_id
+            if sess.get('company_id') is not None:
+                readable = path in {'/api/settings','/api/companies','/api/overview','/api/events'} or bool(__import__('re').fullmatch(r'/api/events/\d+', path))
+                logout = path == '/api/auth/logout' and request.method == 'POST'
+                if not logout and not (request.method == 'GET' and readable):
+                    return JSONResponse({'detail':'公司账号仅可查看本企业风险总览与事件详情；资料与知识库维护由管理员处理。'}, status_code=403)
         response=await call_next(request)
         response.headers['X-Content-Type-Options']='nosniff'
         response.headers['Referrer-Policy']='no-referrer'
@@ -160,7 +186,7 @@ def create_app(settings=None, run_worker=True):
 
     @app.get('/api/release')
     def release():
-        return JSONResponse({'version':'20261111-workbench-verified-r2'},headers={'Cache-Control':'no-store'})
+        return JSONResponse({'version':VERSION},headers={'Cache-Control':'no-store'})
 
     @app.get('/api/health')
     def health(): return {'status':'ok'}
@@ -190,10 +216,8 @@ def create_app(settings=None, run_worker=True):
     def set_session(company_id=None,username='',extra=None):
         token=secrets.token_urlsafe(32)
         active_company=None
-        if company_id is None:
-            selected=store.setting('active_company')
-            if selected and store.one('SELECT id FROM companies WHERE id=?',(selected,)):
-                active_company=selected
+        # A new admin session always starts with all companies. The old global
+        # background selection must not silently narrow current risk statistics.
         with store.db() as db:
             db.execute('DELETE FROM sessions WHERE expires<?',(time.time(),))
             db.execute(
@@ -220,6 +244,7 @@ def create_app(settings=None, run_worker=True):
 
     @app.post('/api/auth/register')
     def register(data:CompanyRegister,request:Request):
+        require_admin(request)
         uname=data.username.strip()
         if len(uname)<3 or uname.lower()=='admin':
             raise ValueError('登录账号须为3至60个字符，且不能使用保留名称 admin。')
@@ -237,6 +262,30 @@ def create_app(settings=None, run_worker=True):
             db.execute('INSERT INTO company_users(username,salt,password_hash,company_id,created_at) VALUES (?,?,?,?,?)',(uname,salt,phash,company_id,now()))
         store.audit('company_registered',f'username={uname}, company={company_id}',company_id=company_id)
         return set_session(company_id=company_id,username=uname,extra={'company_name':profile['name']})
+
+    @app.get('/api/company-users')
+    def company_accounts(request:Request):
+        require_admin(request)
+        rows=store.rows('SELECT u.id,u.username,u.company_id,u.created_at,c.profile_json FROM company_users u JOIN companies c ON c.id=u.company_id ORDER BY u.id DESC')
+        for row in rows:
+            row['company_name']=clean_reference({'title':json.loads(row.pop('profile_json')).get('name','')})['title']
+        return {'items':rows}
+
+    @app.post('/api/company-users')
+    def create_company_account(data:CompanyAccount,request:Request):
+        require_admin(request)
+        uname=data.username.strip()
+        if len(uname)<3 or uname.lower()=='admin':raise ValueError('账号须为3至60个字符，不能使用 admin。')
+        salt=secrets.token_hex(16)
+        with store.db() as db:
+            if not db.execute('SELECT id FROM companies WHERE id=?',(data.company_id,)).fetchone():
+                raise ValueError('所属企业不存在，请重新选择。')
+            if db.execute('SELECT id FROM company_users WHERE lower(username)=lower(?)',(uname,)).fetchone():
+                raise HTTPException(409,'该账号已存在，请使用其他账号名称。')
+            uid=db.execute('INSERT INTO company_users(username,salt,password_hash,company_id,created_at) VALUES (?,?,?,?,?)',
+                           (uname,salt,password_hash(data.password,salt),data.company_id,now())).lastrowid
+        store.audit('company_account_created',f'user={uid}, company={data.company_id}',company_id=data.company_id)
+        return {'id':uid,'company_id':data.company_id}
 
     @app.post('/api/auth/login')
     def login(data:LoginCredentials,request:Request):
@@ -281,7 +330,7 @@ def create_app(settings=None, run_worker=True):
                 'reasoning_effort':settings.model_reasoning_effort if can_manage else None,
                 'store_responses':settings.model_store if can_manage else None,
                 'role':'admin' if can_manage else 'company','can_manage':can_manage,
-                'rules':store.setting('rules'),
+                'rules':current_rules(store.setting('rules')),
                 'retrieval':'混合检索：向量相似度与 BM25；向量未建好时只用 BM25。中文摘要、关键词和中印英对照词仍参与关键词检索','prompt_version':model.PROMPT_VERSION}
 
     @app.put('/api/rules')
@@ -293,8 +342,8 @@ def create_app(settings=None, run_worker=True):
         cats=value['categories']
         if not isinstance(cats,list) or not 1<=len(cats)<=80 or any(not isinstance(c,str) or not c.strip() or len(c)>80 for c in cats) or len(set(cats))!=len(cats):
             raise ValueError('分类须为1至80个不重复的名称。')
-        if not isinstance(value['levels'],dict) or set(value['levels'])!=set(LEVELS) or any(not isinstance(v,str) or not v.strip() or len(v)>2000 for v in value['levels'].values()):
-            raise ValueError('请提供 I–V 级（lv1–lv5）五个等级的判断标准。')
+        if not isinstance(value['levels'],dict) or set(value['levels'])!=set(TARGET_LEVELS) or any(not isinstance(v,str) or not v.strip() or len(v)>2000 for v in value['levels'].values()):
+            raise ValueError('请提供红、黄、蓝三级风险的判断标准；绿色表示无风险，不生成风险事件。')
         if type(value['confirmed']) is not bool or not isinstance(value['version'],str) or not 1<=len(value['version'])<=60 or not isinstance(value['notes'],str) or len(value['notes'])>5000:
             raise ValueError('规则版本、确认状态或说明格式不正确。')
         store.set_setting('rules',value); store.audit('rules_updated',value['version'])
@@ -316,16 +365,22 @@ def create_app(settings=None, run_worker=True):
 
     @app.post('/api/documents')
     def manual(data:Record,request:Request):
+        require_admin(request)
         if data.kind not in ('event','knowledge'): raise ValueError('资料用途无效。')
-        cid=getattr(request.state,'company_id',None)
+        cid=session_company(request) if data.kind=='event' else None
         doc_id,created=insert_document(store,data.model_dump(),data.kind,data.allow_external,company_id=cid)
         store.audit('document_imported',f'id={doc_id}, created={created}, company={cid}',company_id=cid)
         return {'id':doc_id,'created':created}
 
     @app.post('/api/import')
-    async def upload(request:Request,file:UploadFile=File(...),kind:str=Form('event'),allow_external:bool=Form(True)):
+    async def upload(request:Request,file:UploadFile=File(...),kind:str=Form('event'),allow_external:bool=Form(True),legal_metadata:str=Form('{}')):
+        require_admin(request)
         if kind not in ('event','knowledge'): raise ValueError('资料用途无效。')
-        cid=getattr(request.state,'company_id',None)
+        cid=session_company(request) if kind=='event' else None
+        try:
+            uploaded_metadata = legal.validate_metadata(json.loads(legal_metadata))
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            raise ValueError('知识分类信息格式无效。') from None
         content=await file.read(settings.max_upload+1)
         if len(content)>settings.max_upload: raise HTTPException(413,'文件超过10MB限制。')
         filename=Path((file.filename or 'upload').replace('\\','/')).name
@@ -339,7 +394,7 @@ def create_app(settings=None, run_worker=True):
         target.write_bytes(content)
         for item in records:
             try:
-                doc_id,created=insert_document(store,item['record'],kind,allow_external,file_path=stored_name,filename=filename,company_id=cid)
+                doc_id,created=insert_document(store,{**item['record'], 'legal_metadata': uploaded_metadata},kind,allow_external,file_path=stored_name,filename=filename,company_id=cid)
                 created_count+=int(created)
                 results.append({'row':item['row'],'id':doc_id,'status':'created' if created else 'duplicate'})
             except ValueError as error:
@@ -361,12 +416,18 @@ def create_app(settings=None, run_worker=True):
         return False
 
     @app.get('/api/documents')
-    def documents(request:Request,kind:str='event',q:str='',page:int=1,status:str='',policy:str='',sort:str=''):
+    def documents(request:Request,kind:str='event',q:str='',page:int=1,status:str='',policy:str='',sort:str='',category:str='',validity:str=''):
         page=max(1,page)
         if kind not in ('event','knowledge'): raise ValueError('资料用途无效。')
         cid=getattr(request.state,'company_id',None)
         args=[kind]+['%'+q+'%']*4
         where='d.kind=? AND (d.title LIKE ? OR d.source LIKE ? OR d.zh_keywords LIKE ? OR d.zh_summary LIKE ?)'
+        if category:
+            if category not in legal.CATEGORIES: raise ValueError('知识分类无效。')
+            where+=" AND COALESCE(json_extract(d.legal_meta,'$.category'),'unclassified')=?"; args.append(category)
+        if validity:
+            if validity not in legal.VALIDITY: raise ValueError('效力状态无效。')
+            where+=" AND COALESCE(json_extract(d.legal_meta,'$.validity'),'unknown')=?"; args.append(validity)
         if cid is not None:
             if kind=='event':
                 where+=' AND d.company_id=?'; args.append(cid)
@@ -379,17 +440,22 @@ def create_app(settings=None, run_worker=True):
             where+=' AND (SELECT status FROM jobs j WHERE j.document_id=d.id ORDER BY j.id DESC LIMIT 1)=?'; args.append(status)
         count=store.one('SELECT COUNT(*) n FROM documents d WHERE '+where,args)['n']
         order="d.date='',d.date DESC,d.id DESC" if sort=='date' else 'd.id DESC'
-        rows=store.rows("""SELECT d.id,d.title,d.date,d.date_source,d.archived_at,d.fetched_at,d.source,d.url,d.kind,d.allow_external,d.demo,d.created_at,length(d.body) characters,d.zh_summary,d.zh_keywords,d.zh_state,d.company_id,d.filename,d.file_path!='' has_file,substr(d.body,1,3000) date_context,d.quarantined_at,d.quarantine_reason,
+        rows=store.rows("""SELECT d.id,d.title,d.date,d.date_source,d.archived_at,d.fetched_at,d.source,d.url,d.kind,d.allow_external,d.demo,d.created_at,length(d.body) characters,d.zh_summary,d.zh_keywords,d.zh_state,d.company_id,d.filename,d.file_path!='' has_file,substr(d.body,1,3000) date_context,d.quarantined_at,d.quarantine_reason,d.legal_meta,d.legal_revision,
             (SELECT id FROM jobs WHERE document_id=d.id ORDER BY id DESC LIMIT 1) job_id,
             (SELECT status FROM jobs WHERE document_id=d.id ORDER BY id DESC LIMIT 1) job_status,
             (SELECT progress FROM jobs WHERE document_id=d.id ORDER BY id DESC LIMIT 1) job_progress,
             (SELECT total FROM jobs WHERE document_id=d.id ORDER BY id DESC LIMIT 1) job_total,
             (SELECT error FROM jobs WHERE document_id=d.id ORDER BY id DESC LIMIT 1) job_error,
-            (SELECT decision FROM analyses WHERE document_id=d.id ORDER BY version DESC LIMIT 1) decision
+            (SELECT __EFFECTIVE_DECISION__ FROM analyses a WHERE document_id=d.id ORDER BY version DESC LIMIT 1) decision
             ,(SELECT id FROM analyses WHERE document_id=d.id ORDER BY version DESC LIMIT 1) analysis_id
-            FROM documents d WHERE """+where+' ORDER BY '+order+' LIMIT 30 OFFSET ?',args+[(page-1)*30])
+            FROM documents d WHERE """.replace('__EFFECTIVE_DECISION__', effective_decision_sql())+where+' ORDER BY '+order+' LIMIT 30 OFFSET ?',args+[(page-1)*30])
         for row in rows:
+            row.update(clean_reference(row))
+            for key in ('zh_summary','zh_keywords'):
+                row[key]=clean_summary(row[key])
             row['editable']=cid is None or row['company_id']==cid
+            row['legal_metadata']=legal.metadata(row)
+            row.pop('legal_meta', None)
             row['kind_label']=kind_label(store,row)
             row.pop('has_file')
             row['date_note']=absence_note(row)
@@ -401,17 +467,44 @@ def create_app(settings=None, run_worker=True):
         cid=getattr(request.state,'company_id',None)
         doc=store.one('SELECT * FROM documents WHERE id=?',(doc_id,))
         if not doc or not _can_read_doc(doc,cid): raise HTTPException(404,'资料不存在。')
+        doc=clean_reference(doc)
+        for key in ('zh_summary','zh_keywords'):
+            doc[key]=clean_summary(doc[key])
         doc['kind_label']=kind_label(store,doc)
         doc['date_note']=absence_note(doc)
         doc.pop('file_path'); doc.pop('digest')
         doc['editable']=cid is None or doc.get('company_id')==cid
-        doc['chunks']=store.rows('SELECT id,locator,text FROM chunks WHERE document_id=? ORDER BY id',(doc_id,))
+        doc['legal_metadata']=legal.metadata(doc)
+        doc.pop('legal_meta', None)
+        doc['chunks']=store.rows('SELECT id,locator,text,section_type FROM chunks WHERE document_id=? ORDER BY id',(doc_id,))
+        doc['legal_sections']=[{'start': a, 'end': b, 'type': tag, 'label': legal.SECTIONS[tag]} for a,b,tag in legal.section_spans(doc['body'])]
         doc['analyses']=store.rows('SELECT id,version,decision,model,mode,created_at,result_json,rules_json FROM analyses WHERE document_id=? ORDER BY version DESC',(doc_id,))
         for row in doc['analyses']:
-            row['result']=json.loads(row.pop('result_json'))
-            row['rule_version']=json.loads(row.pop('rules_json')).get('version','')
+            row['result']=clean_result(json.loads(row.pop('result_json')))
+            row['rule_version']=rule_label(json.loads(row.pop('rules_json')).get('version',''))
             row['events']=store.rows('SELECT id,title FROM events WHERE analysis_id=?',(row['id'],))
         return doc
+
+    @app.put('/api/documents/{doc_id}/legal-metadata')
+    def update_legal_metadata(doc_id:int,data:LegalMetadataUpdate,request:Request):
+        require_admin(request)
+        cid=company_of(request)
+        value=legal.validate_metadata(data.metadata)
+        with store.db() as db:
+            doc=db.execute('SELECT * FROM documents WHERE id=?',(doc_id,)).fetchone()
+            if not doc or not _can_read_doc(dict(doc),cid): raise HTTPException(404,'资料不存在。')
+            if cid is not None and doc['company_id']!=cid: raise HTTPException(403,'公共资料只能由管理员维护。')
+            if doc['quarantined_at']: raise HTTPException(409,'资料已隔离，暂不能修改分类信息。')
+            changed=db.execute('UPDATE documents SET legal_meta=?,legal_revision=legal_revision+1 WHERE id=? AND legal_revision=?',
+                               (json.dumps(value,ensure_ascii=False),doc_id,data.revision)).rowcount
+            if not changed: raise HTTPException(409,'分类信息已被其他操作更新，请重新打开资料后再保存。')
+        store.audit('legal_metadata_updated',f'id={doc_id}, revision={data.revision+1}',company_id=cid)
+        return {'ok':True,'revision':data.revision+1}
+
+    @app.get('/api/knowledge/schema')
+    def legal_schema(request:Request):
+        require_admin(request)
+        return {'categories':legal.CATEGORIES,'sections':legal.SECTIONS,'validity':legal.VALIDITY}
 
     @app.get('/api/documents/{doc_id}/file')
     def original(doc_id:int,request:Request):
@@ -421,11 +514,14 @@ def create_app(settings=None, run_worker=True):
         return FileResponse(store.directory/'uploads'/doc['file_path'],filename=doc['filename'],media_type='application/octet-stream')
 
     @app.get('/api/knowledge/search')
-    def knowledge_search(request:Request,q:str=''):
+    def knowledge_search(request:Request,q:str='',category:str='',section:str='',validity:str=''):
+        require_admin(request)
+        for value, choices in ((category,legal.CATEGORIES),(section,legal.SECTIONS),(validity,legal.VALIDITY)):
+            if value and value not in choices: raise ValueError('知识检索筛选条件无效。')
         if not q.strip(): return {'items':[],'total_documents':0,'limit':8,'query':q}
         cid=company_of(request)
         scope_cid=cid if cid is not None else (getattr(request.state,'active_company',None) or 0)
-        full=retrieve(store,q,limit=200,company_id=scope_cid,per_document=True)
+        full=retrieve(store,q,limit=200,company_id=scope_cid,per_document=True,category=category,section=section,validity=validity)
         items=annotate_hits(store,q,full[:8],viewer_company_id=cid)
         return {'items':items,'total_documents':len(full),'limit':8,'query':q}
 
@@ -546,7 +642,7 @@ def create_app(settings=None, run_worker=True):
         if review and review not in ('pending','accepted','needs_change'): raise ValueError('复核状态无效。')
         conditions=[
             'a.id=(SELECT a2.id FROM analyses a2 WHERE a2.document_id=a.document_id ORDER BY version DESC LIMIT 1)',
-            'd.quarantined_at IS NULL',
+            'd.quarantined_at IS NULL', 'e.deleted_at IS NULL', "e.level!='non_risk'",
         ]
         args=[]
         if company_id is not None:
@@ -554,6 +650,9 @@ def create_app(settings=None, run_worker=True):
             args.append(company_id)
         if legacy_clause:
             conditions.append(legacy_clause)
+        if category=='其他':
+            conditions.append("e.category IN ('其他','对不上')")
+            category=''
         for value,sql in [(q,'(e.title LIKE ? OR e.summary LIKE ?)'),(level,'e.level=?'),(category,'e.category=?'),(review,'e.review_status=?'),(date_from,'d.date>=?'),(date_to,'d.date<=?')]:
             if value:
                 conditions.append(sql)
@@ -564,18 +663,22 @@ def create_app(settings=None, run_worker=True):
 
     @app.get('/api/events')
     def events(request:Request,q:str='',level:str='',category:str='',review:str='',demo:str='all',page:int=1,date_from:str='',date_to:str=''):
-        cid=getattr(request.state,'company_id',None)
+        cid=session_company(request)
         base,args=events_query(demo,q,level,category,review,date_from,date_to,company_id=cid)
         total=store.one('SELECT COUNT(*) n'+base,args)['n']
         rows=store.rows('SELECT e.id,e.title,e.category,e.level,e.summary,e.review_status,d.date,d.date_source,d.source,d.demo,d.id document_id,a.model,a.mode'+base+' ORDER BY d.date DESC,e.id DESC LIMIT 20 OFFSET ?',args+[(max(page,1)-1)*20])
+        for row in rows:
+            if row['category']=='对不上': row['category']='其他'
+            row['title']=clean_model_text(row['title']);row['summary']=clean_model_text(row['summary'])
         return {'items':rows,'total':total,'page':max(page,1),'page_size':20}
 
     @app.get('/api/countermeasures')
     def countermeasure_library(request:Request):
-        return countermeasures.load_library(store.directory)
+        raise HTTPException(410,'独立对策库已移除，对策及来源请在风险事件详情查看。')
 
     @app.get('/api/countermeasures/source')
     def countermeasure_source(request:Request):
+        raise HTTPException(410,'独立对策库已移除。')
         path=countermeasures.source_file(store.directory)
         if path is None:
             raise HTTPException(503,countermeasures.UNAVAILABLE)
@@ -587,32 +690,64 @@ def create_app(settings=None, run_worker=True):
         row=store.one("""SELECT e.*,a.document_id,a.version,a.model,a.mode,a.created_at,a.duration_ms,a.rules_json,a.usage_json,a.result_json,
             d.date,d.date_source,d.source,d.url,d.demo,d.company_id,d.quarantined_at,d.quarantine_reason
             FROM events e JOIN analyses a ON a.id=e.analysis_id JOIN documents d ON d.id=a.document_id WHERE e.id=?""",(event_id,))
-        if not row or (cid is not None and row.get('company_id')!=cid): raise HTTPException(404,'事件不存在。')
+        if not row or row.get('deleted_at') or (cid is not None and row.get('company_id')!=cid): raise HTTPException(404,'事件不存在。')
         for name in ('evidence','rules','usage','result'): row[name]=json.loads(row.pop(name+'_json'))
+        row['evidence']=[clean_reference({**r,'reason':clean_model_text(r.get('reason',''))}) for r in row['evidence']]
+        for key in ('title','summary','impact','recommendation','review_note'):
+            if key in row:row[key]=clean_model_text(row[key])
+        row['result']=clean_result(row['result'])
+        if isinstance(row.get('rules'),dict):
+            row['rules']={**row['rules'],'notes':clean_model_text(row['rules'].get('notes','')),'version':rule_label(row['rules'].get('version',''))}
+        row['actions']=json.loads(row.pop('actions_json','[]'))
+        for action in row['actions']:
+            action['text']=clean_model_text(action.get('text',''));action['conditions']=clean_model_text(action.get('conditions',''))
+            action['basis']=[clean_reference({**r,'reason':clean_model_text(r.get('reason',''))}) for r in action.get('basis',[])]
         row['is_latest']=store.one('SELECT id FROM analyses WHERE document_id=? ORDER BY version DESC LIMIT 1',(row['document_id'],))['id']==row['analysis_id']
         row['review_history']=store.rows('SELECT status,note,created_at FROM review_history WHERE event_id=? ORDER BY id DESC',(event_id,))
-        row['countermeasures']=countermeasures.for_level(countermeasures.load_library(store.directory),row['level'])
+        if row['category']=='对不上': row['category']='其他'
+        company=store.one('SELECT profile_json FROM companies WHERE id=?',(row['company_id'],)) if row['company_id'] else None
+        row['company_name']=clean_reference({'title':json.loads(company['profile_json']).get('name','')})['title'] if company else ''
+        row['changes']=store.rows('SELECT actor,action,before_json,after_json,reason,created_at FROM event_changes WHERE event_id=? ORDER BY id DESC',(event_id,)) if is_admin(request) else []
+        if not is_admin(request):
+            # Event evidence is allowed; complete private documents/model inputs are not.
+            for name in ('result','usage','rules'): row[name]={}
+            row['review_history']=[]
         return row
 
     @app.put('/api/events/{event_id}/review')
     def review(event_id:int,data:Review,request:Request):
+        require_admin(request)
         if data.status not in ('pending','accepted','needs_change'): raise ValueError('复核状态无效。')
         cid=getattr(request.state,'company_id',None)
         with store.db() as db:
-            previous=db.execute('SELECT e.review_status,e.review_note,e.reviewed_at,d.company_id FROM events e JOIN analyses a ON a.id=e.analysis_id JOIN documents d ON d.id=a.document_id WHERE e.id=?',(event_id,)).fetchone()
-            if not previous or (cid is not None and previous['company_id']!=cid):
+            previous=db.execute('SELECT e.*,d.company_id FROM events e JOIN analyses a ON a.id=e.analysis_id JOIN documents d ON d.id=a.document_id WHERE e.id=?',(event_id,)).fetchone()
+            if not previous or previous['deleted_at'] or (cid is not None and previous['company_id']!=cid):
                 raise HTTPException(404,'事件不存在。')
+            if data.level is not None:
+                if data.level not in ('lv1','lv2','lv3','non_risk'):
+                    raise ValueError('请选择红、黄、蓝或绿色无风险。')
+                if data.revision is None:
+                    raise ValueError('调整风险等级需提供当前版本，请重新打开事件。')
+                if data.level!=previous['level'] and not data.note.strip():
+                    raise ValueError('调整风险等级时请填写复核意见，说明调整依据。')
+            if data.revision is not None and data.revision!=previous['revision']:
+                raise HTTPException(409,'事件已更新，请重新打开后再复核。')
+            new_level=data.level or previous['level']
             if previous['reviewed_at'] and not db.execute('SELECT id FROM review_history WHERE event_id=?',(event_id,)).fetchone():
                 db.execute('INSERT INTO review_history(event_id,status,note,created_at) VALUES (?,?,?,?)',(event_id,previous['review_status'],previous['review_note'],previous['reviewed_at']))
-            changed=db.execute('UPDATE events SET review_status=?,review_note=?,reviewed_at=? WHERE id=?',(data.status,data.note,now(),event_id)).rowcount
-            if not changed: raise HTTPException(404,'事件不存在。')
+            changed=db.execute('UPDATE events SET review_status=?,review_note=?,reviewed_at=?,level=?,revision=revision+1 WHERE id=? AND revision=?',(data.status,data.note,now(),new_level,event_id,previous['revision'])).rowcount
+            if not changed: raise HTTPException(409,'事件已更新，请重新打开后再复核。')
+            if new_level!=previous['level']:
+                db.execute('INSERT INTO event_changes(event_id,actor,action,before_json,after_json,reason,created_at) VALUES (?,?,?,?,?,?,?)',
+                    (event_id,request.state.username,'review_level',json.dumps({'level':previous['level']}),
+                     json.dumps({'level':new_level}),data.note,now()))
             db.execute('INSERT INTO review_history(event_id,status,note,created_at) VALUES (?,?,?,?)',(event_id,data.status,data.note,now()))
         store.audit('event_reviewed',f'event={event_id}, status={data.status}',company_id=previous['company_id'])
-        return {'ok':True}
+        return {'ok':True,'revision':previous['revision']+1,'level':new_level}
 
     @app.get('/api/overview')
     def overview(request:Request,demo:str='all'):
-        cid=getattr(request.state,'company_id',None)
+        cid=session_company(request)
         base,args=events_query(demo,company_id=cid)
         doc_where="WHERE kind='event' AND quarantined_at IS NULL"
         doc_args=[]
@@ -625,12 +760,22 @@ def create_app(settings=None, run_worker=True):
         if cid is not None:
             job_where+=' AND d.company_id=?'; job_args.append(cid)
         company_count=store.one('SELECT COUNT(*) n FROM companies')['n'] if cid is None else 1
+        incomplete=store.rows("SELECT d.title,d.date,a.result_json FROM documents d JOIN analyses a ON a.id=(SELECT id FROM analyses WHERE document_id=d.id ORDER BY version DESC LIMIT 1) "+doc_where+" AND a.decision='insufficient' ORDER BY a.id DESC LIMIT 20",doc_args)
+        gaps=[]
+        for item in incomplete:
+            result=json.loads(item['result_json'])
+            reason=result.get('reason') or '；'.join(p.get('reason','') for p in result.get('parts',[]) if p.get('decision')=='insufficient')
+            coverage=result.get('source_coverage',{}).get('downgraded','')
+            gaps.append({'title':clean_reference({'title':item['title']})['title'],'date':item['date'],
+                         'reason':clean_model_text(clean_summary('；'.join(filter(None,[reason,coverage])))) or '尚需管理员核对资料完整性，未形成风险判断。'})
         return {'total':store.one('SELECT COUNT(*) n'+base,args)['n'],
             'levels':store.rows('SELECT e.level,COUNT(*) count'+base+' GROUP BY e.level',args),
-            'categories':store.rows('SELECT e.category,COUNT(*) count'+base+' GROUP BY e.category ORDER BY count DESC',args),
+            'categories':store.rows("SELECT CASE WHEN e.category='对不上' THEN '其他' ELSE e.category END category,COUNT(*) count"+base+" GROUP BY CASE WHEN e.category='对不上' THEN '其他' ELSE e.category END ORDER BY count DESC",args),
             'pending':store.one('SELECT COUNT(*) n'+base+" AND e.review_status='pending'",args)['n'],
             'documents':store.one('SELECT COUNT(*) n FROM documents '+doc_where,doc_args)['n'],
+            'decisions':store.rows("SELECT "+effective_decision_sql()+" decision,COUNT(*) count FROM documents d JOIN analyses a ON a.id=(SELECT id FROM analyses WHERE document_id=d.id ORDER BY version DESC LIMIT 1) "+doc_where+' GROUP BY 1',doc_args),
             'active_jobs':store.one('SELECT COUNT(*) n FROM jobs j JOIN documents d ON d.id=j.document_id '+job_where,job_args)['n'],
+            'evidence_gaps':gaps,
             'scope':{'all_companies':cid is None,'company_id':cid,'company_count':company_count}}
 
     @app.post('/api/demo')
@@ -660,7 +805,8 @@ def create_app(settings=None, run_worker=True):
 
     @app.get('/api/export/events')
     def export_events(request:Request,q:str='',level:str='',category:str='',review:str='',demo:str='all',date_from:str='',date_to:str=''):
-        cid=getattr(request.state,'company_id',None)
+        require_admin(request)
+        cid=session_company(request)
         base,args=events_query(demo,q,level,category,review,date_from,date_to,company_id=cid)
         rows=store.rows('SELECT e.*,d.date,d.date_source,d.source,d.demo,d.url,a.version'+base+' ORDER BY d.date DESC,e.id DESC',args)
         output=io.StringIO(newline=''); writer=csv.writer(output)
@@ -669,7 +815,7 @@ def create_app(settings=None, run_worker=True):
             value=str(value or '')
             return "'"+value if value.lstrip().startswith(('=','+','-','@','\t','\r')) else value
         for row in rows:
-            writer.writerow([safe(v) for v in [row['id'],row['title'],LEVEL_LABELS.get(row['level'],row['level']),row['category'],row['summary'],row['impact'],row['recommendation'],{'pending':'待复核','accepted':'已认可','needs_change':'需修正'}[row['review_status']],row['review_note'],row['date'],row['source'],row['url'],row['version'],'虚构演示' if row['demo'] else '非演示数据', '\n'.join(r.get('quote','') for r in json.loads(row['evidence_json'])),row['date_source']]])
+            writer.writerow([safe(v) for v in [row['id'],clean_model_text(row['title']),LEVEL_LABELS.get(row['level'],row['level']),'其他' if row['category']=='对不上' else row['category'],clean_model_text(row['summary']),clean_model_text(row['impact']),clean_model_text(row['recommendation']),{'pending':'待复核','accepted':'已认可','needs_change':'需修正'}[row['review_status']],row['review_note'],row['date'],row['source'],row['url'],row['version'],'虚构演示' if row['demo'] else '非演示数据', '\n'.join(clean_preparation_markers(r.get('quote','')) for r in json.loads(row['evidence_json'])),row['date_source']]])
         store.audit('events_exported',f'count={len(rows)}, scope={demo}, company={cid}',company_id=cid)
         return Response('﻿'+output.getvalue(),media_type='text/csv',headers={'Content-Disposition':'attachment; filename="risk-events.csv"'})
 

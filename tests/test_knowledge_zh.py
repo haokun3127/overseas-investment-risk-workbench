@@ -32,7 +32,7 @@ def test_chinese_summary_makes_foreign_documents_searchable_in_chinese(client,mo
         return {'summary':'印尼劳工部2025年第5号部长条例，规定向劳动者发放工资补贴。','keywords':['外籍劳工','工资补贴','劳工部']},{}
     monkeypatch.setattr(enrich.model,'call_model',fake)
     assert not retrieve(store,'工资补贴')
-    assert asyncio.run(client.app.state.enricher.run_once()) is True
+    assert law == secret  # identical body is reused despite a different title
     assert asyncio.run(client.app.state.enricher.run_once()) is True
     assert asyncio.run(client.app.state.enricher.run_once()) is False
     assert store.one('SELECT zh_state FROM documents WHERE id=?',(secret,))['zh_state']=='done'
@@ -68,3 +68,26 @@ def test_model_outage_leaves_documents_pending_and_bad_output_marks_failed(clien
     monkeypatch.setattr(enrich.model,'call_model',junk)
     assert asyncio.run(client.app.state.enricher.run_once()) is True
     assert store.one('SELECT zh_state FROM documents WHERE id=?',(doc,))['zh_state']=='failed'
+
+def test_automatic_category_does_not_overwrite_manual_classification(client,monkeypatch):
+    import json
+    store=client.app.state.store
+    doc=add(store,'合同法条','合同成立后双方应当依约履行义务。')
+    async def classified(settings,payload,system=None):
+        return {'summary':'合同履行法律条文。','keywords':['合同履行'],'category':'id_law'},{}
+    monkeypatch.setattr(enrich.model,'call_model',classified)
+    assert asyncio.run(client.app.state.enricher.run_once())
+    row=store.one('SELECT legal_meta,legal_revision FROM documents WHERE id=?',(doc,))
+    assert json.loads(row['legal_meta'])['category']=='id_law' and row['legal_revision']==1
+    other=add(store,'争议新闻','双方当事人就设备交付产生争议，尚未提起诉讼。')
+    async def changed_during_call(settings,payload,system=None):
+        metadata=json.loads(store.one('SELECT legal_meta FROM documents WHERE id=?',(other,))['legal_meta'])
+        metadata['category']='incident'
+        with store.db() as db:
+            db.execute('UPDATE documents SET legal_meta=?,legal_revision=legal_revision+1 WHERE id=?',(json.dumps(metadata),other))
+        return {'summary':'合同争议资料。','keywords':['合同争议'],'category':'judgment'},{}
+    monkeypatch.setattr(enrich.model,'call_model',changed_during_call)
+    assert asyncio.run(client.app.state.enricher.run_once())
+    row=store.one('SELECT legal_meta,legal_revision FROM documents WHERE id=?',(other,))
+    assert json.loads(row['legal_meta'])['category']=='incident' and row['legal_revision']==1
+

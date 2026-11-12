@@ -58,6 +58,8 @@ def test_scope_is_rechecked_before_any_content_reaches_model(tmp_path, monkeypat
     app = app_for(tmp_path)
     with TestClient(app, headers=HEADERS) as admin, TestClient(app, headers=HEADERS) as tenant, TestClient(app, headers=HEADERS) as other:
         setup(admin)
+        tenant.cookies.update(admin.cookies)
+        other.cookies.update(admin.cookies)
         company = tenant.post("/api/auth/register", json={
             "username": "fixture_tenant", "password": secrets.token_urlsafe(18), "name": "合成企业",
         }).json()["company_id"]
@@ -69,7 +71,7 @@ def test_scope_is_rechecked_before_any_content_reaches_model(tmp_path, monkeypat
         doc(app.state.store, "未授权合成资料", allow_external=False, company_id=company)
         foreign = doc(app.state.store, "其他企业合成资料", allow_external=True, company_id=other_company)
         doc(app.state.store, "演示合成资料", allow_external=True, demo=True)
-        quarantined = doc(app.state.store, "隔离合成资料", allow_external=True)
+        quarantined = doc(app.state.store, "隔离合成资料", text=EVIDENCE+"此条为独立隔离资料。", allow_external=True)
         with app.state.store.db() as db:
             db.execute("UPDATE documents SET quarantined_at='2026-01-01' WHERE id=?", (quarantined,))
         rows = app.state.store.rows("SELECT id FROM chunks ORDER BY id DESC")
@@ -81,23 +83,17 @@ def test_scope_is_rechecked_before_any_content_reaches_model(tmp_path, monkeypat
             return {"status": "insufficient", "blocks": []}, {}
 
         monkeypatch.setattr(consultation.model, "call_model", answer)
-        assert tenant.post("/api/consultation", json={"question": "环境监测", "company_id": other_company}).status_code == 409
+        assert tenant.post("/api/consultation", json={"question":"环境监测","company_id":other_company}).status_code == 403
         assert not seen
-        assert tenant.post("/api/consultation", json={"question": "环境监测", "company_id": company}).status_code == 200
-        assert seen[-1] == {"企业内部合成资料", "公开合成资料", "公司档案 · 合成企业"}
-        assert admin.post("/api/consultation", json={"question": "环境监测"}).status_code == 200
+        assert admin.post("/api/consultation", json={"question":"环境监测"}).status_code == 200
         assert seen[-1] == {"公开合成资料"}
-        assert other.post("/api/consultation", json={"question": "环境监测", "company_id": other_company}).status_code == 200
-        assert seen[-1] == {"其他企业合成资料", "公开合成资料", "公司档案 · 另一个合成企业"}
+        assert other.post("/api/consultation", json={"question":"环境监测"}).status_code == 403
         assert admin.post(f"/api/companies/{company}/activate").status_code == 200
-        assert admin.post(f"/api/companies/{other_company}/activate").status_code == 200
-        assert admin.post("/api/consultation", json={"question": "环境监测", "company_id": company}).status_code == 409
-        assert admin.post("/api/consultation", json={"question": "环境监测", "company_id": other_company}).status_code == 200
-        assert seen[-1] == {"其他企业合成资料", "公开合成资料", "公司档案 · 另一个合成企业"}
-        assert tenant.get(f"/api/documents/{own}").status_code == 200
-        assert tenant.get(f"/api/documents/{public}").status_code == 200
-        assert tenant.get(f"/api/documents/{foreign}").status_code == 404
-        assert other.get(f"/api/documents/{own}").status_code == 404
+        assert admin.post("/api/consultation", json={"question":"环境监测","company_id":company}).status_code == 200
+        assert seen[-1] == {"公开合成资料"}  # generic consultation ignores selected/private context
+        for identifier in (own,public,foreign):
+            assert tenant.get(f"/api/documents/{identifier}").status_code == 403
+        assert other.get(f"/api/documents/{own}").status_code == 403
 
 
 def test_no_eligible_source_skips_model_and_unverified_quote_is_rejected(tmp_path, monkeypatch):

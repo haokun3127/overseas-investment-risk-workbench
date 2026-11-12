@@ -8,7 +8,7 @@ import pytest
 from app import countermeasures
 from app.store import DEFAULT_RULES, now
 from test_workbench import client, add
-from test_tenant_authz import app, admin, companies
+from test_tenant_authz import app, admin, companies, add_event
 
 
 def write_bank(directory):
@@ -30,7 +30,7 @@ def write_bank(directory):
 def make_event(c,level,category='对不上'):
     store=c.app.state.store
     number=store.one('SELECT COUNT(*) n FROM events')['n']
-    doc=add(c,title=f'合成风险资料 {number}',body=f'合成事项{number}，用于独立事件和分级对策的接口核查。')
+    doc=add_event(c,title=f'合成风险资料 {number}',body=f'合成事项{number}，用于独立事件和分级对策的接口核查。')
     with store.db() as db:
         analysis=db.execute('''INSERT INTO analyses(document_id,version,decision,model,mode,rules_json,
             knowledge_json,result_json,created_at,duration_ms,usage_json) VALUES (?,1,'risk','synthetic','external',?,'{}','{}',?,1,'{}')''',
@@ -41,13 +41,10 @@ def make_event(c,level,category='对不上'):
 
 
 def test_library_and_original_document_require_login(client):
-    folder,data,raw=write_bank(client.app.state.store.directory)
-    result=client.get('/api/countermeasures')
-    assert result.status_code==200
-    assert [entry['level'] for entry in result.json()['levels']]==list(countermeasures.LEVEL_ORDER)
-    source=client.get('/api/countermeasures/source')
-    assert source.status_code==200 and source.content==raw
-    assert 'attachment' in source.headers['content-disposition']
+    write_bank(client.app.state.store.directory)
+    assert client.get('/api/countermeasures').status_code==410
+    assert client.get('/api/countermeasures/source').status_code==410
+    assert countermeasures.load_library(client.app.state.store.directory)['status']=='available'
     with TestClient(client.app) as anonymous:
         assert anonymous.get('/api/countermeasures').status_code==401
         assert anonymous.get('/api/countermeasures/source').status_code==401
@@ -59,9 +56,10 @@ def test_unmapped_risk_uses_grade_without_changing_model_output(client):
     store=client.app.state.store
     before=store.one('SELECT * FROM events WHERE id=?',(event_id,))
     event=client.get(f'/api/events/{event_id}').json()
-    assert event['category']=='对不上' and event['level']=='lv3'
+    assert event['category']=='其他' and event['level']=='lv3'
     assert event['recommendation']=='独立的模型建议'
-    reference=event['countermeasures']
+    assert 'countermeasures' not in event
+    reference=countermeasures.for_level(countermeasures.load_library(store.directory),event['level'])
     assert reference['status']=='available' and reference['level']=='lv3'
     assert reference['enterprise'][0]['text']=='企业合成对策3'
     assert reference['state'][0]['text']=='国家合成对策3'
@@ -84,12 +82,12 @@ def test_report_aggregates_filtered_grades_once_and_does_not_map_legacy(client):
 
 def test_missing_or_tampered_source_does_not_break_existing_event(client):
     event=make_event(client,'lv2')
-    assert client.get(f'/api/events/{event}').json()['countermeasures']['status']=='unavailable'
-    assert client.get('/api/countermeasures/source').status_code==503
+    assert 'countermeasures' not in client.get(f'/api/events/{event}').json()
+    assert client.get('/api/countermeasures/source').status_code==410
     folder,data,raw=write_bank(client.app.state.store.directory)
     (folder/'source.doc').write_bytes(b'Tampered reference')
-    assert client.get('/api/countermeasures').json()['status']=='unavailable'
-    assert client.get('/api/countermeasures/source').status_code==503
+    assert countermeasures.load_library(client.app.state.store.directory)['status']=='unavailable'
+    assert client.get('/api/countermeasures/source').status_code==410
     result=client.get(f'/api/events/{event}')
     assert result.status_code==200 and result.json()['recommendation']=='独立的模型建议'
 
@@ -99,22 +97,22 @@ def test_malformed_roles_and_untrusted_extra_fields(client):
     data['source']['server_path']='private configuration location'
     data['levels']['lv1']['status']='fabricated'
     (folder/'bank.json').write_text(json.dumps(data),encoding='utf-8')
-    loaded=client.get('/api/countermeasures').json()
+    loaded=countermeasures.load_library(client.app.state.store.directory)
     assert loaded['status']=='available'
     assert 'server_path' not in loaded['source'] and 'status' not in loaded['levels'][0]
     data['levels']['lv1']['state']=[]
     (folder/'bank.json').write_text(json.dumps(data),encoding='utf-8')
-    assert client.get('/api/countermeasures').json()['status']=='unavailable'
+    assert countermeasures.load_library(client.app.state.store.directory)['status']=='unavailable'
 
 
 def test_common_reference_does_not_unlock_another_company_event(app,admin,companies):
     first,second=companies
     write_bank(app.state.store.directory)
     event=make_event(first,'lv2')
-    assert first.get(f'/api/events/{event}').json()['countermeasures']['status']=='available'
+    assert 'countermeasures' not in first.get(f'/api/events/{event}').json()
     assert second.get(f'/api/events/{event}').status_code==404
-    assert second.get('/api/report').json()['countermeasures']['groups']==[]
-    assert second.get('/api/countermeasures').json()['status']=='available'
+    assert second.get('/api/report').status_code==403
+    assert second.get('/api/countermeasures').status_code==403
 
 
 def test_source_symlink_cannot_leave_data_directory(client,tmp_path_factory):
@@ -126,8 +124,8 @@ def test_source_symlink_cannot_leave_data_directory(client,tmp_path_factory):
         (folder/'source.doc').symlink_to(outside)
     except OSError:
         pytest.skip('This Windows user cannot create symlinks')
-    assert client.get('/api/countermeasures').json()['status']=='unavailable'
-    assert client.get('/api/countermeasures/source').status_code==503
+    assert countermeasures.load_library(client.app.state.store.directory)['status']=='unavailable'
+    assert client.get('/api/countermeasures/source').status_code==410
 
 
 def test_reference_script_loads_before_application_boot():

@@ -198,10 +198,9 @@ async function enhanceView(route,html){
     host.querySelector('.panel-content').insertAdjacentHTML('beforeend',`<h3>连接检查</h3><p class="form-note">检查服务器与当前模型的连接。</p><button class="secondary" id="model-check" ${state.config.configured?'':'disabled'}>检查模型连接</button><div id="model-check-result" aria-live="polite"></div>`);
     try{const r=await api('/runtime');host.insertAdjacentHTML('beforeend',`<section class="panel"><div class="panel-heading"><h2>服务运行状态</h2><button class="text-button" data-refresh>更新状态</button></div><div class="panel-content"><dl class="definition"><dt>状态时间</dt><dd>${when(r.checked_at)}</dd><dt>后台队列</dt><dd>${r.worker_enabled?'已启用':'未启用（当前实例不执行任务）'}</dd><dt>资料与索引</dt><dd>${r.documents} 条资料 · ${r.chunks} 个文本片段 · ${r.analyses} 个分析版本</dd><dt>数据库大小</dt><dd>${(r.database_bytes/1048576).toFixed(2)} MB（不含附件及 WAL 文件）</dd><dt>磁盘可用</dt><dd>${(r.disk_free_bytes/1073741824).toFixed(2)} GB</dd><dt>最近分析记录</dt><dd>${r.last_analysis?when(r.last_analysis.created_at)+' · '+esc(r.last_analysis.model):'暂无分析记录'}</dd><dt>网站抓取备用出口</dt><dd>${r.fetch_proxy?'已启用（直连失败时改走本机代理）':'未配置'}</dd><dt>浏览器渲染服务</dt><dd>${r.renderer?'已启用（脚本加载的页面由隔离浏览器渲染）':'未配置'}</dd><dt>中文摘要</dt><dd>${r.enrich_pending?`${r.enrich_pending} 份资料待生成`:'全部已生成'}${r.enrich_failed?` · ${r.enrich_failed} 份生成失败`:''}</dd><dt>模型最近一次错误</dt><dd>${r.model_error?`${when(r.model_error.at)} · ${esc(r.model_error.error)}`:'暂无'}</dd><dt>自动备份</dt><dd>${r.backup?.state==='failed'?`<strong class="error">最近执行失败：${esc(r.backup.error)}</strong><br>`:r.backup?.state==='running'?'备份正在执行<br>':''}${!r.backup?'未配置（请按 README 设置每日备份）':r.backup.created_at?'最近一次 '+when(r.backup.created_at)+' · 共保留 '+r.backup.count+' 份':'已配置，尚未生成备份'}</dd></dl><p class="form-note">备份包含数据库和附件，不含密钥配置。恢复流程见项目 README。</p></div></section>`);}catch(e){host.insertAdjacentHTML('beforeend',errorBox('运行状态读取失败：'+e.message));}
   }
-  if(route==='events'){
+  if(route==='events'&&state.auth?.role==='admin'){
     const href='api/export/events?'+new URLSearchParams({...state.filter,demo:scopeValue()});
     host.querySelector('.page-heading .actions').insertAdjacentHTML('afterbegin',`<a class="secondary" href="${esc(href)}">导出当前筛选 CSV</a>`);
-    host.querySelector('.page-heading .actions').insertAdjacentHTML('afterbegin',`<a class="secondary" href="#report?${esc(new URLSearchParams({...state.filter,demo:scopeValue()}))}">生成风险简报</a>`);
     host.querySelector('#event-filter').insertAdjacentHTML('beforeend','<span class="filter-help">导出包含全部匹配事件、复核意见及引用依据。</span>');
   }
   if(route==='event'){
@@ -237,7 +236,7 @@ async function enhanceView(route,html){
       const badgeNode=row.querySelector('.badge');row.dataset.jobStatus=[...badgeNode.classList].find(v=>v!=='badge');
     });
   }
-  if(route==='overview'||route==='settings'||route==='knowledge'){
+  if(route==='settings'||route==='knowledge'){
     try{
       const w=(route==='overview'&&state.overviewWorkspace)||await api('/workspace');
       if(route==='overview'){

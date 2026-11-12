@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import secrets
 import sqlite3
 import pytest
@@ -248,7 +249,10 @@ def test_quarantine_dry_run_mismatch_and_apply(client, monkeypatch, tmp_path):
     assert 'evidence.json' in manifest and {d['id'] for d in evidence['documents']} == {doc, knowledge}
     assert [e['id'] for e in evidence['events']] == [event]
     assert (tmp_path / 'ev' / 'database-before.db').exists()
-    assert (tmp_path / 'ev').stat().st_mode & 0o777 == 0o700
+    # POSIX permission bits are not represented by Windows/NTFS stat().
+    # Keep the confidentiality requirement enforced on the Linux deployment.
+    if os.name == 'posix':
+        assert (tmp_path / 'ev').stat().st_mode & 0o777 == 0o700
     audits = store.rows("SELECT detail,company_id FROM audit WHERE action='documents_quarantined'")
     assert len(audits) == 2 and any(f'events={event}' in a['detail'] for a in audits)
 

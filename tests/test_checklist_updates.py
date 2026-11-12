@@ -1,3 +1,4 @@
+from app.meeting import current_rules
 import asyncio
 import json
 
@@ -47,19 +48,19 @@ def test_checklist_requires_materials_notes_and_same_case(app,admin,companies,mo
     a,b=companies
     _,aid=insufficient(app,a,monkeypatch)
     _,bid=insufficient(app,b,monkeypatch)
-    item=a.post(f'/api/evidence/{aid}/checklist',json={'title':'补齐适用范围'}).json()['id']
+    item=admin.post(f'/api/evidence/{aid}/checklist',json={'title':'补齐适用范围'}).json()['id']
     endpoint=f'/api/evidence/{aid}/checklist/{item}'
     data={'title':'补齐适用范围','revision':1,'status':'provided'}
-    assert a.patch(endpoint,json=data).status_code==400
-    assert a.patch(endpoint,json={**data,'status':'not_needed'}).status_code==400
-    assert a.patch(endpoint,json={**data,'status':'bad'}).status_code==400
-    foreign=supplement(b,bid).json()['id']
-    assert a.patch(endpoint,json={**data,'supplement_ids':[foreign]}).status_code==400
-    assert b.patch(endpoint,json=data).status_code==404
-    assert b.post(f'/api/evidence/{aid}/checklist/generate').status_code==404
-    assert b.post(f'/api/evidence/{aid}/checklist',json={'title':'越权'}).status_code==404
-    assert a.patch(endpoint,json={**data,'status':'not_needed','note':'此事项不适用，已核对业务范围'}).status_code==200
-    assert a.post(f'/api/evidence/{aid}/checklist',json={'title':'   '}).status_code==400
+    assert admin.patch(endpoint,json=data).status_code==400
+    assert admin.patch(endpoint,json={**data,'status':'not_needed'}).status_code==400
+    assert admin.patch(endpoint,json={**data,'status':'bad'}).status_code==400
+    foreign=supplement(admin,bid).json()['id']
+    assert admin.patch(endpoint,json={**data,'supplement_ids':[foreign]}).status_code==400
+    assert b.patch(endpoint,json=data).status_code==403
+    assert b.post(f'/api/evidence/{aid}/checklist/generate').status_code==403
+    assert a.post(f'/api/evidence/{aid}/checklist',json={'title':'越权'}).status_code==403
+    assert admin.patch(endpoint,json={**data,'status':'not_needed','note':'此事项不适用，已核对业务范围'}).status_code==200
+    assert admin.post(f'/api/evidence/{aid}/checklist',json={'title':'   '}).status_code==400
 
 
 def test_unlink_last_material_reopens_checklist(app,admin,monkeypatch):
@@ -128,7 +129,7 @@ def test_update_transfer_scope_dedup_rules_and_lock_cleanup(web_client):
     assert response.status_code==200,response.text
     doc=response.json()['items'][0]['id'];job=response.json()['items'][0]['job_id']
     assert store.one('SELECT company_id FROM documents WHERE id=?',(doc,))['company_id']==owner
-    assert json.loads(store.one('SELECT rules_json FROM jobs WHERE id=?',(job,))['rules_json'])==store.setting('rules')
+    assert json.loads(store.one('SELECT rules_json FROM jobs WHERE id=?',(job,))['rules_json'])==current_rules(store.setting('rules'))
     assert c.get('/api/web/updates?status=reviewed').json()['items'][0]['document_id']==doc
     assert c.post(path,json={'revision':1,'company_id':owner}).status_code==409
     repeated=c.post(path,json={'revision':2,'company_id':owner,'analyze':True})

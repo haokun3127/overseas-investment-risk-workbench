@@ -49,6 +49,7 @@ def test_job_keeps_company_snapshot_without_consent_gate(client,monkeypatch):
     assert captured[0]['scope']['industry']=='私密行业'
     jid=c.post('/api/jobs',json={'document_ids':[doc]}).json()['items'][0]['id']
     asyncio.run(c.app.state.worker.process(store.one('SELECT * FROM jobs WHERE id=?',(jid,))))
-    assert captured[-1]['company']['name']=='乙公司'
-    assert captured[-1]['scope']['industry']=='电子'
+    # Import is now bound to the selected company. A later selection cannot reassign it.
+    assert captured[-1]['company']['name']=='甲公司私密'
+    assert captured[-1]['scope']['industry']=='私密行业'
     assert store.one('SELECT status FROM jobs WHERE id=?',(jid,))['status']=='completed'

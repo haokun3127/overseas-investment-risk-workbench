@@ -30,6 +30,10 @@ def _currency(value):
 
 
 def amounts(text):
+    # Chinese amounts often write the currency unit twice: “100万元人民币”.
+    # Normalize only explicitly named CNY, never infer the currency of a bare “元”.
+    text = re.sub(rf'({NUMBER})\s*({SCALE})?元人民币', r'\1\2人民币', text, flags=re.I)
+    text = re.sub(rf'人民币\s*({NUMBER})\s*({SCALE})?元', r'\1\2人民币', text, flags=re.I)
     result = []
     for pattern in (PREFIX, SUFFIX):
         for match in pattern.finditer(text):

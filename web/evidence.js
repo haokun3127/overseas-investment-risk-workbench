@@ -67,5 +67,5 @@ function bindWebChanges(target){
 }
 
 async function showComparedSnapshot(id){
-  try{const p=await api('/web/pages/'+id);$('#source-title').textContent='采集快照原文';$('#source-content').innerHTML=`<h2>${esc(p.title)}</h2><p>${when(p.fetched_at)}${p.archived_at?' · 存档 '+esc(p.archived_at):''}</p><a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.url)}</a><div class="source-body">${esc(p.body)}</div>`;const dialog=$('#source-dialog');if(!dialog.open)dialog.showModal();dialog.scrollTop=0;$('#source-content').scrollTop=0;}catch(e){toast(e.message);}
+  try{const p=await api('/web/pages/'+id);$('#source-title').textContent='采集快照原文';$('#source-content').innerHTML=`<h2>${esc(p.title)}</h2><p>${when(p.fetched_at)}${p.archived_at?' · 存档 '+esc(p.archived_at):''}</p><a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.url)}</a><div class="source-body">${readingEsc(p.body)}</div>`;const dialog=$('#source-dialog');if(!dialog.open)dialog.showModal();dialog.scrollTop=0;$('#source-content').scrollTop=0;}catch(e){toast(e.message);}
 }

@@ -32,12 +32,14 @@ def admin(app):
     with TestClient(app, headers=HEADERS) as c:
         c.admin_password = password()
         assert c.post('/api/auth/setup', json={'password': c.admin_password}).status_code == 200
+        app.state.test_admin_client = c
         yield c
 
 
 def register(app, username, name):
     c = TestClient(app, headers=HEADERS)
     c.__enter__()
+    c.cookies.update(app.state.test_admin_client.cookies)
     r = c.post('/api/auth/register', json={'username': username, 'password': password(), 'name': name, 'allow_external': True})
     assert r.status_code == 200, r.text
     c.company_id = r.json()['company_id']
@@ -54,12 +56,16 @@ def companies(app, admin):
 
 
 def add_event(c, title='供应链资料', body='园区企业需在月底前提交年度核查材料，逾期将暂停原料采购。'):
+    if getattr(c, 'company_id', None):
+        # Seed company-owned fixtures through storage; company UI is now read-only.
+        return insert_document(c.app.state.store, {'title':title,'body':body}, company_id=c.company_id)[0]
     r = c.post('/api/documents', json={'title': title, 'body': body, 'kind': 'event', 'allow_external': True})
     assert r.status_code == 200, r.text
     return r.json()['id']
 
 
 def analyse(app, c, doc_id, monkeypatch, captured=None):
+    c = app.state.test_admin_client
     r = c.post('/api/jobs', json={'document_ids': [doc_id]})
     assert r.status_code == 200, r.text
     job = r.json()['items'][0]['id']
@@ -149,43 +155,27 @@ def test_csrf_header_and_origin_are_required(admin):
 
 # --- tenant isolation -----------------------------------------------------
 
-def test_cross_company_access_is_404(app, companies, monkeypatch):
-    a, b = companies
-    doc = add_event(a)
-    job = analyse(app, a, doc, monkeypatch)
-    event = a.get('/api/events').json()['items'][0]['id']
-    queued = a.post('/api/jobs', json={'document_ids': [doc]}).json()['items'][0]['id']
-    assert b.get(f'/api/documents/{doc}').status_code == 404
-    assert b.get(f'/api/documents/{doc}/file').status_code == 404
-    assert b.patch(f'/api/documents/{doc}/policy', json={'allow_external': False}).status_code == 404
-    assert b.delete(f'/api/documents/{doc}').status_code == 404
-    assert b.post(f'/api/jobs/{queued}/cancel').status_code == 404
-    assert b.get(f'/api/events/{event}').status_code == 404
-    assert b.put(f'/api/events/{event}/review', json={'status': 'accepted', 'note': ''}).status_code == 404
-    assert b.get('/api/events').json()['total'] == 0
-    assert b.get('/api/jobs').json()['total'] == 0
-    assert b.get('/api/jobs/active').json()['active'] == 0
-    assert a.get('/api/jobs/active').json()['active'] == 1
-    assert b.get('/api/report').json()['total'] == 0
-    assert '原料采购暂停风险' not in b.get('/api/export/events').text
-    assert job and a.get(f'/api/documents/{doc}').status_code == 200
+def test_cross_company_access_is_404(app, admin, companies, monkeypatch):
+    a,b=companies
+    doc=add_event(a)
+    analyse(app,admin,doc,monkeypatch)
+    event=a.get('/api/events').json()['items'][0]['id']
+    assert b.get(f'/api/events/{event}').status_code==404
+    assert b.get('/api/events').json()['total']==0
+    assert a.get(f'/api/events/{event}').status_code==200
+    for path in (f'/api/documents/{doc}',f'/api/documents/{doc}/file','/api/jobs','/api/report','/api/export/events'):
+        assert a.get(path).status_code==403 and b.get(path).status_code==403
+    assert a.put(f'/api/events/{event}/review',json={'status':'accepted','note':'x'}).status_code==403
 
 
 def test_public_knowledge_is_read_only_for_companies(app, companies):
-    a, _ = companies
-    store = app.state.store
-    public, _ = insert_document(store, {'title': '公共法规', 'body': '公共法规正文，用于只读测试。', 'source': 's', 'date': ''},
-                                'knowledge', True)
-    detail = a.get(f'/api/documents/{public}')
-    assert detail.status_code == 200 and detail.json()['editable'] is False
-    listed = {row['id']: row for row in a.get('/api/documents?kind=knowledge').json()['items']}
-    assert listed[public]['editable'] is False
-    assert a.delete(f'/api/documents/{public}').status_code == 404
-    assert a.patch(f'/api/documents/{public}/policy', json={'allow_external': False}).status_code == 404
-    own = a.post('/api/documents', json={'title': '自有资料', 'body': '本公司知识库资料正文内容。', 'kind': 'knowledge'}).json()['id']
-    listed = {row['id']: row for row in a.get('/api/documents?kind=knowledge').json()['items']}
-    assert listed[own]['editable'] is True
-    assert store.one('SELECT allow_external FROM documents WHERE id=?', (public,))['allow_external'] == 1
+    a,_=companies
+    public,_=insert_document(app.state.store,{'title':'公共法规','body':'公共法规正文，用于只读测试。'},'knowledge')
+    for path in ('/api/documents?kind=knowledge',f'/api/documents/{public}','/api/knowledge/search?q=法规'):
+        assert a.get(path).status_code==403
+    assert a.post('/api/documents',json={'title':'自有资料','body':'本公司知识正文','kind':'knowledge'}).status_code==403
+    assert a.delete(f'/api/documents/{public}').status_code==403
+    assert app.state.store.one('SELECT id FROM documents WHERE id=?',(public,))
 
 
 def test_settings_hide_admin_fields_from_companies(companies, admin):
@@ -199,25 +189,12 @@ def test_settings_hide_admin_fields_from_companies(companies, admin):
 
 # --- audit scoping --------------------------------------------------------
 
-def test_recent_activity_is_scoped_by_company_id(app, admin):
-    store = app.state.store
-    clients = {}
-    for index in range(11):
-        clients[index + 1] = register(app, f'tenant_{index:02d}', f'测试公司{index:02d}')
-    try:
-        ids = {n: c.company_id for n, c in clients.items()}
-        assert ids[1] != ids[10] != ids[11]
-        add_event(clients[10], title='十号公司资料')
-        for n in (1, 11):
-            details = [r['detail'] for r in clients[n].get('/api/workspace').json()['recent_activity']]
-            assert all('十号公司资料' not in d for d in details)
-            assert all(f'company={ids[10]}' not in d for d in details)
-        assert any(r['action'] == 'document_added' or 'document' in r['action']
-                   for r in clients[10].get('/api/workspace').json()['recent_activity'])
-    finally:
-        for c in clients.values():
-            c.__exit__(None, None, None)
-    assert store.one('SELECT COUNT(*) n FROM audit WHERE company_id IS NULL AND detail LIKE ?', (f'%company={ids[10]}%',))['n'] == 0
+def test_recent_activity_is_scoped_by_company_id(app, admin, companies):
+    a,b=companies
+    app.state.store.audit('document_imported','本企业内部操作',company_id=a.company_id)
+    assert a.get('/api/workspace').status_code==403
+    assert b.get('/api/workspace').status_code==403
+    assert any(r['detail']=='本企业内部操作' for r in admin.get('/api/workspace').json()['recent_activity'])
 
 
 def test_legacy_audit_backfill_is_exact_and_idempotent(tmp_path):
@@ -265,7 +242,7 @@ def test_analysis_background_uses_owner_then_session_company(app, admin, compani
     assert captured[-1]['company']['name'] == '甲测试公司'
     selected = admin.post('/api/companies', json={'name': '管理员选中公司', 'industry': '选中行业', 'allow_external': True}).json()['id']
     admin_doc = add_event(admin, title='管理员资料')
-    assert store.one('SELECT company_id FROM documents WHERE id=?', (admin_doc,))['company_id'] is None
+    assert store.one('SELECT company_id FROM documents WHERE id=?', (admin_doc,))['company_id'] == selected
     analyse(app, admin, admin_doc, monkeypatch, captured)
     assert captured[-1]['company']['name'] == '管理员选中公司' and selected
     a_doc = store.one("SELECT id FROM documents WHERE company_id=? AND kind='event' LIMIT 1", (a.company_id,))['id']

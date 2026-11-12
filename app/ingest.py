@@ -10,6 +10,10 @@ from openpyxl import load_workbook
 from pypdf import PdfReader
 from .store import now
 from .publication import from_text, from_snapshot
+from .legal_knowledge import structured_chunks, validate_metadata
+import json
+from .meeting import normalized_text
+from .presentation import clean_name
 
 MAX_TEXT = 60000
 ALIASES = {'标题': 'title', '时间': 'date', '日期': 'date', '来源': 'source', '正文': 'body', '正文内容': 'body', '内容': 'body', '原始链接': 'url', '链接': 'url'}
@@ -17,6 +21,10 @@ ALIASES = {'标题': 'title', '时间': 'date', '日期': 'date', '来源': 'sou
 def validate_record(record):
     result = {k: str(record.get(k) or '').strip() for k in ['title', 'date', 'source', 'url', 'body']}
     if not result['title'] or not result['body']:
+        raise ValueError('标题和正文不能为空。')
+    for key in ('title','source'):
+        result[key]=clean_name(result[key])
+    if not result['title']:
         raise ValueError('标题和正文不能为空。')
     if len(result['body']) > MAX_TEXT:
         raise ValueError('单条正文超过60000字符，请按章节拆分导入。')
@@ -101,11 +109,15 @@ def parse_file(filename, data):
         raise ValueError('支持 .csv、.xlsx、.docx、文本型 .pdf、.txt 和 .md 文件。')
     return [{'record': {'title': Path(filename).stem, 'body': body}, 'row': 1}]
 
-def insert_document(store, record, kind='event', allow_external=False, demo=False, file_path='', filename='', company_id=None, meta=None):
+def insert_document(store, record, kind='event', allow_external=False, demo=False, file_path='', filename='', company_id=None, meta=None, identity=''):
     r = validate_record(record)
+    legal_meta = validate_metadata(record.get('legal_metadata') or {})
     meta = meta or {}
     date_source = (meta.get('date_source') or 'provided') if r['date'] else ''
-    if not r['date'] and not any(term in r['source'] for term in ('事实摘录', '公司信息档案')):
+    # Display-name normalization must not change whether an excerpt carries an
+    # independently published date. Keep the original source's date semantics.
+    source_for_dates=str(record.get('source') or '')+'\n'+r['source']
+    if not r['date'] and not any(term in source_for_dates for term in ('事实摘录', '公司信息档案')):
         r['date'], date_source, _ = from_text(r['body'])
         if file_path:
             uploads = (store.directory / 'uploads').resolve()
@@ -116,9 +128,33 @@ def insert_document(store, record, kind='event', allow_external=False, demo=Fals
                     r['date'], date_source, _ = from_snapshot(original.read_bytes(), content_type, r['body'])
     scope_prefix = f'c{company_id}\0' if company_id else ''
     digest = hashlib.sha256((scope_prefix + kind + '\0' + str(demo) + '\0' + r['title'] + '\0' + r['body']).encode()).hexdigest()
+    if identity:
+        digest = hashlib.sha256((digest + identity).encode()).hexdigest()
     with store.db() as db:
-        existing = db.execute('SELECT id FROM documents WHERE digest=?', (digest,)).fetchone()
+        db.execute('BEGIN IMMEDIATE')
+        existing = db.execute('SELECT id,date,legal_meta FROM documents WHERE digest=?', (digest,)).fetchone()
+        if existing and kind == 'knowledge':
+            old_meta = json.loads(existing['legal_meta'] or '{}')
+            fields = ('document_no','effective_from','effective_to')
+            distinct = any(old_meta.get(k) and legal_meta.get(k) and old_meta[k] != legal_meta[k] for k in fields)
+            distinct = distinct or bool(existing['date'] and r['date'] and existing['date'] != r['date'])
+            if distinct:
+                digest = hashlib.sha256((digest + json.dumps([r['date']] + [legal_meta.get(k, '') for k in fields], ensure_ascii=False)).encode()).hexdigest()
+                existing = db.execute('SELECT id FROM documents WHERE digest=?', (digest,)).fetchone()
+        if not existing and kind == 'knowledge':
+            # Compare within the same visibility scope; never leak another tenant's documents.
+            body_key = normalized_text(r['body'])
+            for candidate in db.execute('SELECT id,body,date,legal_meta FROM documents WHERE kind=? AND demo=? AND company_id IS ? AND quarantined_at IS NULL', (kind, int(demo), company_id)):
+                old_meta = json.loads(candidate['legal_meta'] or '{}')
+                version_fields = ('document_no', 'effective_from', 'effective_to')
+                distinct_version = any(old_meta.get(k) and legal_meta.get(k) and old_meta[k] != legal_meta[k] for k in version_fields)
+                distinct_version = distinct_version or bool(candidate['date'] and r['date'] and candidate['date'] != r['date'])
+                if not distinct_version and normalized_text(candidate['body']) == body_key:
+                    existing = candidate
+                    break
         if existing:
+            db.execute('INSERT OR IGNORE INTO document_origins(document_id,title,source,url,created_at) VALUES (?,?,?,?,?)',
+                       (existing['id'], r['title'], r['source'], r['url'], now()))
             return existing['id'], False
         doc_id = db.execute('''INSERT INTO documents(
                 title,date,source,url,body,kind,allow_external,demo,digest,file_path,filename,created_at,company_id,
@@ -128,6 +164,8 @@ def insert_document(store, record, kind='event', allow_external=False, demo=Fals
                 int(demo), digest, file_path, filename, now(), company_id, date_source,
                 str(meta.get('archived_at') or ''), str(meta.get('fetched_at') or ''),
             )).lastrowid
-        for locator, content in chunks_for(r['body']):
-            db.execute('INSERT INTO chunks(document_id,locator,text) VALUES (?,?,?)', (doc_id,locator,content))
+        db.execute('UPDATE documents SET legal_meta=? WHERE id=?', (json.dumps(legal_meta, ensure_ascii=False), doc_id))
+        pieces = structured_chunks(r['body']) if kind == 'knowledge' else ((loc, text, 'general') for loc, text in chunks_for(r['body']))
+        for locator, content, section in pieces:
+            db.execute('INSERT INTO chunks(document_id,locator,text,section_type) VALUES (?,?,?,?)', (doc_id,locator,content,section))
         return doc_id, True

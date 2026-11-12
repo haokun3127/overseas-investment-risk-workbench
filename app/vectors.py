@@ -392,7 +392,7 @@ def _fuse(store, query, bm25_rows, limit, external, company_id, per_document):
         if per_document and store.one("SELECT name FROM sqlite_master WHERE type='table' AND name='companies'"):
             profiles = {row['document_id'] for row in store.rows('SELECT document_id FROM companies WHERE document_id IS NOT NULL')}
         marks = ','.join('?' for _ in missing)
-        for row in store.rows(f'''SELECT c.id,c.document_id,c.locator,c.text,d.title,d.source,d.date,d.zh_summary,d.zh_keywords
+        for row in store.rows(f'''SELECT c.id,c.document_id,c.locator,c.text,c.section_type,d.legal_meta,d.title,d.source,d.date,d.zh_summary,d.zh_keywords
                 FROM chunks c JOIN documents d ON d.id=c.document_id WHERE c.id IN ({marks})''', tuple(missing)):
             # BM25 only lets a company profile through per-document search on a title match.
             if row['document_id'] in profiles:

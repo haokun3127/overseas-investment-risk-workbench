@@ -1,3 +1,4 @@
+from app.meeting import current_rules
 import json
 
 from app.webcompare import differences
@@ -62,4 +63,4 @@ def test_website_auto_analysis_also_snapshots_rules(web_client,monkeypatch):
     assert run['status']=='completed'
     job=store.one('SELECT * FROM jobs')
     assert job and job['rules_snapshot_origin']=='submission'
-    assert json.loads(job['rules_json'])==store.setting('rules')
+    assert json.loads(job['rules_json'])==current_rules(store.setting('rules'))

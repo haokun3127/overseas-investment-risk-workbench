@@ -22,7 +22,7 @@ def test_risk_can_be_explicitly_unmapped_without_changing_taxonomy():
     value['events'][0]['summary'] = '存在直接风险事实，但现有三级定义没有覆盖，待人工归类。'
     result = model.validate_result(value, references(), rules)
     assert result['decision'] == 'risk'
-    assert result['events'][0]['category'] == '对不上'
+    assert result['events'][0]['category'] == '其他'
     assert rules == DEFAULT_RULES
 
 
@@ -53,6 +53,7 @@ def test_vector_group_preparation_retains_all_allowed_categories(monkeypatch):
     plan={'categories':chosen,'sources':[chunk],'category_chunks':{c:[8] for c in chosen},
           'top_similarity':0.6,'floor':0.3,'model':'synthetic-embedding'}
     monkeypatch.setattr(jobs,'plan_sources',lambda *a,**k:plan)
+    monkeypatch.setattr(Worker,'_internal_advice',lambda self:[])
     queries=[]
     def fake_retrieve(store,query,**kwargs):
         queries.append(query)

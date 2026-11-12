@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from . import model
+from . import model, countermeasures
 from .profile_fields import LABELS as COMPANY_FIELDS
 from .indicators import INDICATORS
 from .retrieval import retrieve
@@ -33,6 +33,12 @@ class Worker:
 
     def start(self):
         self.task = asyncio.create_task(self.loop())
+
+    def _internal_advice(self):
+        library=countermeasures.load_library(self.store.directory)
+        if library.get('status')!='available':return []
+        return [{'level':entry['level'],'enterprise':[r['text'] for r in entry['enterprise']],
+                 'state':[r['text'] for r in entry['state']]} for entry in library['levels'] if entry['level'] in ('lv1','lv2','lv3')]
 
     async def stop(self):
         if self.task:
@@ -114,8 +120,8 @@ class Worker:
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',(doc['id'],job['id'],version,decision,self.settings.model_name,self.settings.model_mode,
                     json.dumps(rules,ensure_ascii=False),json.dumps(knowledge,ensure_ascii=False),json.dumps(result_blob,ensure_ascii=False),now(),int((time.monotonic()-started)*1000),json.dumps(usage))).lastrowid
                 for event in events:
-                    db.execute('''INSERT INTO events(analysis_id,title,category,level,summary,impact,recommendation,evidence_json)
-                        VALUES (?,?,?,?,?,?,?,?)''',(analysis_id,event['title'],event['category'],event['level'],event['summary'],event['impact'],event['recommendation'],json.dumps(event['evidence'],ensure_ascii=False)))
+                    db.execute('''INSERT INTO events(analysis_id,title,category,level,summary,impact,recommendation,evidence_json,actions_json)
+                        VALUES (?,?,?,?,?,?,?,?,?)''',(analysis_id,event['title'],event['category'],event['level'],event['summary'],event['impact'],event['recommendation'],json.dumps(event['evidence'],ensure_ascii=False),json.dumps(event.get('actions',[]),ensure_ascii=False)))
                 db.execute("UPDATE jobs SET status='completed',finished_at=? WHERE id=?",(now(),job['id']))
             self.store.audit('analysis_completed',f'job={job["id"]}, analysis={analysis_id}',company_id=doc.get('company_id'))
         except asyncio.CancelledError:
@@ -134,11 +140,33 @@ class Worker:
             references[f'S{item["id"]}'] = {**item, 'kind': 'source', 'role': 'supplement'}
         knowledge = {}
         for hit in hits:
+            doc_meta=self.store.one('SELECT source,url,date,legal_meta FROM documents WHERE id=?',(hit['document_id'],))
+            if doc_meta:
+                hit.update({k:doc_meta[k] for k in ('source','url','date')})
+                hit['legal_metadata']=json.loads(doc_meta['legal_meta'] or '{}')
             hit.pop('zh_summary', None)
             hit.pop('zh_keywords', None)
             references[f'K{hit["id"]}'] = {**hit, 'kind': 'knowledge'}
             knowledge[str(hit['id'])] = hit
         return references, knowledge
+
+    def _with_legal_hits(self, hits, fact_chunks, external, job_company_id, limit=4):
+        """Add statute passages matched on the facts; per-document retrieval keeps only one passage per law."""
+        facts = ' '.join((chunk.get('text') or '') for chunk in fact_chunks[:3]).strip()[:600]
+        if not facts:
+            return hits
+        try:
+            legal = retrieve(self.store, facts, external=external, company_id=job_company_id,
+                             per_document=False, category='id_law', limit=limit)
+        except Exception:
+            return hits
+        seen = {hit['id'] for hit in hits}
+        merged = list(hits)
+        for hit in legal:
+            if hit['id'] not in seen:
+                seen.add(hit['id'])
+                merged.append(hit)
+        return merged
 
     def _narrow_rules(self, rules, chosen):
         gloss = {category: f'{family} / {group}：{category}（{note}）' for family, group, category, note in INDICATORS}
@@ -160,12 +188,15 @@ class Worker:
         if len(narrowed['focus_categories']) < 3:
             return None
         sources = plan['sources']
-        query = ' '.join(narrowed['focus_categories'][:4] + [context.get('industry') or '', context.get('location') or ''])
+        # The event title anchors legal retrieval to the facts; category names alone match generic passages.
+        query = ' '.join([doc['title'] or ''] + narrowed['focus_categories'][:4] + [context.get('industry') or '', context.get('location') or ''])
         hits = retrieve(self.store, query, external=external, company_id=job_company_id, per_document=True, limit=4)
+        hits = self._with_legal_hits(hits, sources, external, job_company_id)
         # References carry the original chunk text, which is what quotes are validated against.
         references, knowledge = self._references(doc, sources, supplements, hits)
         brief = _company_context(context)
         payload = {'scope': {'country': '印度尼西亚', 'industry': context.get('industry') or '未指定行业'},
+            'internal_advice':self._internal_advice(),
             'rules': narrowed,
             'document': {'title': doc['title'], 'date': doc['date'], 'source': doc['source']},
             'company': brief,
@@ -206,9 +237,11 @@ class Worker:
         results, events, usage, knowledge = [], [], [], {}
         for index, chunk in enumerate(chunks):
             hits = await asyncio.to_thread(retrieve, self.store, chunk['text'], external=external, company_id=job_company_id, per_document=True)
+            hits = await asyncio.to_thread(self._with_legal_hits, hits, [chunk], external, job_company_id, 2)
             references, found = self._references(doc, [chunk], supplements, hits)
             knowledge.update(found)
             payload = {'scope': {'country': '印度尼西亚', 'industry': context.get('industry') or '未指定行业'}, 'rules': rules,
+                'internal_advice':self._internal_advice(),
                 'document': {'title': doc['title'], 'date': doc['date'], 'source': doc['source']},
                 'company': _company_context(context),
                 'part': f'{index + 1}/{len(chunks)}', 'references': [{'reference': key, **value} for key, value in references.items()]}

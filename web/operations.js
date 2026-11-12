@@ -3,11 +3,12 @@
 const webSourceStatuses={unrun:'尚未运行',failed:'最近检索失败',undecided:'未筛选',active:'正在检索',completed:'最近检索完成',scheduled:'已开启定时',manual:'仅手动触发',disabled:'已停用'};
 function overviewScope(){
   const scoped=state.auth?.role==='company';
-  return `<div class="overview-scope">统计范围：${scoped?'本公司':`全部公司（${state.overviewScope?.company_count??'—'} 家）`}<span>${scoped?'':'背景公司仅用于新分析，不会过滤统计'}</span></div>`;
+  return `<div class="overview-scope">统计范围：${scoped?'本公司':state.company?esc(state.company.name):`全部公司（${state.overviewScope?.company_count??'—'} 家）`}</div>`;
 }
 function companyContext(){
   const scoped=state.auth?.role==='company';
-  return `<details class="company-context" ${state.company?'':'open'}><summary><span>${scoped?'本公司档案':'新分析背景'}</span><strong>${esc(state.company?.name||'请选择公司')}</strong><span class="context-action">设置${icon('arrow')}</span></summary>${companyPanel({compact:true})}<p class="context-help">${scoped?'公司档案用于本公司的后续分析。':'选择仅影响本会话此后提交、且没有归属公司的资料；已有资料和统计范围不变。'}</p></details>`;
+  if(scoped)return '';
+  return `<section class="meeting-company"><label>企业范围<select id="company-select"><option value="">全部企业</option>${companyData.items.map(c=>`<option value="${c.id}" ${c.id===state.company?.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label><button class="text-button" id="company-new">新增企业</button>${state.company?'<button class="text-button" id="company-edit">维护企业信息</button>':''}</section>`;
 }
 function collectionHealth(h){
   if(state.auth?.role!=='admin')return '';

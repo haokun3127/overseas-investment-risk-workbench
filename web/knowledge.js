@@ -14,12 +14,17 @@ const kr = {
 function markRanges(text, terms) {
   const source = String(text || '');
   const ranges = [];
+  const markers=Array.from(source.matchAll(/[ \t]*[〔［【\[]\s*S\d+\s*[〕］】\]]/g))
+    .map(match=>[match.index,match.index+match[0].length]);
   (terms || []).filter(Boolean).forEach((term) => {
     const latin = /^[a-z0-9]+$/i.test(term);
     const pattern = latin
       ? new RegExp(`(?<![a-z0-9])${term}(?![a-z0-9])`, 'gi')
       : new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
-    Array.from(source.matchAll(pattern)).forEach((m) => ranges.push([m.index, m.index + m[0].length]));
+    Array.from(source.matchAll(pattern)).forEach((m) => {
+      const end=m.index+m[0].length;
+      if(!markers.some(([left,right])=>m.index<right&&end>left))ranges.push([m.index,end]);
+    });
   });
   ranges.sort((a, b) => (a[0] - b[0]) || (b[1] - a[1]));
   let html = '';
@@ -29,11 +34,11 @@ function markRanges(text, terms) {
     if (start < cursor) {
       return;
     }
-    html += `${esc(source.slice(cursor, start))}<mark class="kr-hit" data-hit="${count}" data-start="${start}">${esc(source.slice(start, end))}</mark>`;
+    html += `${readingEsc(source.slice(cursor, start))}<mark class="kr-hit" data-hit="${count}" data-start="${start}">${readingEsc(source.slice(start, end))}</mark>`;
     cursor = end;
     count += 1;
   });
-  return { html: html + esc(source.slice(cursor)), count };
+  return { html: html + readingEsc(source.slice(cursor)), count };
 }
 
 function groupHits(items) {
@@ -110,6 +115,9 @@ function renderReaderList(data, groups) {
 function renderReaderPane(hit, i, n, withBar = true) {
   const windows = hit.hit_windows || [];
   const rows = [
+    ['知识分类', esc(hit.legal_metadata?.category_label || '未分类')],
+    hit.section_type ? ['匹配段落', esc(legalSchema?.sections[hit.section_type] || '正文')] : null,
+    ['法规效力', esc(hit.legal_metadata?.validity_label || '效力未确认')],
     ['来源类型', esc(hit.kind_label || '资料')],
     ['来源', esc(hit.source || '未填写')],
     ['资料日期（来源）', esc(dateLabel(hit))],
@@ -372,7 +380,9 @@ async function runKnowledgeSearch(q, index = 0) {
   button.textContent = '正在检索…';
   target.innerHTML = '<p class="loading" role="status">正在匹配知识库资料…</p>';
   try {
-    const data = await api(`/knowledge/search?q=${encodeURIComponent(q)}`);
+    const params = new URLSearchParams(new FormData(form));
+    params.set('q',q);
+    const data = await api(`/knowledge/search?${params}`);
     if (request !== kr.request || !target.isConnected) {
       return;
     }
@@ -452,7 +462,8 @@ function bindKnowledgeReader() {
     if (!q) {
       return;
     }
-    const hash = `#knowledge?${new URLSearchParams({ kq: q })}`;
+    const values = new FormData(form);
+    const hash = `#knowledge?${new URLSearchParams({ kq: q, kcategory: values.get('category') || '', ksection: values.get('section') || '', kvalidity: values.get('validity') || '' })}`;
     if (location.hash === hash) {
       runKnowledgeSearch(q, 0);
     } else {

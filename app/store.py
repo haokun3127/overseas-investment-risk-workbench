@@ -20,7 +20,7 @@ LEGACY_LEVELS = {
     "orange": "中风险（旧标准）",
     "yellow": "一般关注（旧标准）",
 }
-LEVEL_LABELS = {**LEVELS, **LEGACY_LEVELS}
+LEVEL_LABELS = {'lv1':'红色风险','lv2':'黄色风险','lv3':'蓝色风险','lv4':'灰色预警（历史原始值）','lv5':'绿色预警（历史原始值）',**LEGACY_LEVELS,'non_risk':'绿色 · 无风险'}
 LEVEL_ORDER = [*LEVELS, *LEGACY_LEVELS]
 
 DEFAULT_RULES = {
@@ -206,6 +206,10 @@ class Store:
                         (int(match.group(1)), row["id"]),
                     )
             db.execute("UPDATE jobs SET status=\x27failed\x27, error=\x27服务重启中断了任务，请重试。\x27, finished_at=? WHERE status=\x27running\x27", (now(),))
+        from .legal_knowledge import migrate
+        migrate(self)
+        from .meeting import initialize
+        initialize(self)
 
     def delete_documents(self, ids):
         ids = list(dict.fromkeys(int(i) for i in ids))
@@ -274,6 +278,8 @@ class Store:
         rules_json = db.execute("SELECT value FROM settings WHERE key='rules'").fetchone()['value']
         if not json.loads(rules_json)['confirmed']:
             raise ValueError('请先确认甲方风险分类分级规则。')
+        from .meeting import current_rules
+        rules_json = json.dumps(current_rules(json.loads(rules_json)), ensure_ascii=False)
         checklist=[]
         if parent_analysis_id:
             for item in db.execute('SELECT id,title,status,note,revision FROM evidence_checklist WHERE analysis_id=? ORDER BY id',(parent_analysis_id,)):

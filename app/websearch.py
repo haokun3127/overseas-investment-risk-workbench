@@ -32,6 +32,7 @@ from .publication import find_publication_date, from_html, from_text, from_snaps
 from .reference_copy import read_reference_copy
 from .archive_copy import read_archive_copy
 from .retained_pdf import read_retained_pdf
+from .presentation import clean_name
 
 AGENT = 'RiskWorkbenchBot'
 USER_AGENT = 'RiskWorkbenchBot/1.1'
@@ -1485,6 +1486,8 @@ def router(store,settings):
         run['judged']=sum(p['relevant'] is not None for p in run['items'])
         run['model_responses']=len(run['usage'])
         run['reused_pages']=sum(p['review_origin']=='reused' for p in run['items'])
+        # Historic configs remain immutable; their display names follow current naming rules.
+        run['config']['name']=clean_name(run['config'].get('name',''))
         return run
     @api.post('/runs/{run_id}/cancel')
     def cancel(run_id:int):

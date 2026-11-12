@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from .store import now
 from .ingest import chunks_for
+from .presentation import clean_company_profile
 
 from .profile_fields import LABELS
 class Profile(BaseModel):
@@ -41,7 +42,7 @@ def initialize(store):
             db.execute("UPDATE documents SET company_id=? WHERE id=? AND company_id IS NULL", (row["id"], row["document_id"]))
 
 def unpack(row):
-    return {**json.loads(row["profile_json"]),"id":row["id"],"document_id":row["document_id"],"updated_at":row["updated_at"]}
+    return {**clean_company_profile(json.loads(row["profile_json"])),"id":row["id"],"document_id":row["document_id"],"updated_at":row["updated_at"]}
 
 def current(store, company_id=None):
     row = store.one("SELECT * FROM companies WHERE id=?", (company_id,)) if company_id else None
@@ -67,6 +68,13 @@ def sync(db,company_id,profile,document_id):
 
 def router(store):
     api=APIRouter(prefix="/api/companies")
+    @api.delete('/active')
+    def clear_active(request:Request):
+        from .access import require_admin
+        require_admin(request)
+        with store.db() as db:
+            db.execute('UPDATE sessions SET active_company=NULL WHERE token=?', (request.state.session_key,))
+        return {'ok':True}
     @api.get("")
     def listing(request:Request):
         scoped_id=getattr(request.state,"company_id",None)
@@ -88,7 +96,7 @@ def router(store):
         return save(data,company_id,request=request)
     def save(data,company_id=None,request=None):
         scoped_id=getattr(request.state,"company_id",None) if request else None
-        profile={k:v.strip() if isinstance(v,str) else v for k,v in data.model_dump().items()}
+        profile=clean_company_profile(data.model_dump())
         profile["allow_external"]=True
         if not profile["name"]: raise ValueError("请填写公司名称。")
         created = company_id is None

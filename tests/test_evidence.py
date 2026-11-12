@@ -1,3 +1,4 @@
+from app.meeting import current_rules
 import asyncio
 import json
 
@@ -12,6 +13,7 @@ from test_tenant_authz import app, admin, companies, add_event
 
 def insufficient(app,client,monkeypatch):
     doc=add_event(client)
+    client=app.state.test_admin_client
     job=client.post('/api/jobs',json={'document_ids':[doc]}).json()['items'][0]['id']
     async def fake(*args,**kwargs):
         return {'decision':'insufficient','reason':'缺少通知的完整正文及具体适用对象。','events':[]},{}
@@ -77,19 +79,15 @@ def test_complete_supplement_flow_preserves_history_and_citations(app,admin,monk
 def test_supplements_respect_tenant_scope_and_auth(app,companies,admin,monkeypatch):
     a,b=companies
     doc,aid=insufficient(app,a,monkeypatch)
-    sid=supplement(a,aid,allow_external=False).json()['id']
-    assert a.get(f'/api/documents/{sid}').status_code==200
-    assert b.get('/api/evidence').json()['total']==0
-    for method,path,kwargs in [
-        ('get',f'/api/evidence/{aid}',{}),
-        ('get',f'/api/documents/{sid}',{}),
-        ('post',f'/api/evidence/{aid}/supplements',{'json':{'title':'越权','body':'不得越权'}}),
-        ('post',f'/api/evidence/{aid}/reanalyze',{}),
-        ('delete',f'/api/evidence/{aid}/supplements/{sid}',{}),
-        ('post',f'/api/evidence/{aid}/upload',{'files':{'file':('test.txt',b'hello')}}),
-    ]:
-        assert getattr(b,method)(path,**kwargs).status_code==404
-    assert a.post(f'/api/evidence/{aid}/reanalyze').status_code==200
+    sid=supplement(admin,aid).json()['id']
+    for client in (a,b):
+        for method,path,kwargs in [
+            ('get',f'/api/evidence/{aid}',{}),('get',f'/api/documents/{sid}',{}),
+            ('post',f'/api/evidence/{aid}/supplements',{'json':{'title':'越权','body':'不得越权'}}),
+            ('post',f'/api/evidence/{aid}/reanalyze',{}),
+            ('delete',f'/api/evidence/{aid}/supplements/{sid}',{}),
+            ('post',f'/api/evidence/{aid}/upload',{'files':{'file':('test.txt',b'hello')}})]:
+            assert getattr(client,method)(path,**kwargs).status_code==403
     assert admin.get('/api/evidence').json()['total']==1
     with TestClient(app) as anon:
         assert anon.get('/api/evidence').status_code==401
@@ -140,9 +138,9 @@ def test_queued_manual_rules_are_frozen_and_upgrade_is_idempotent(app,admin,monk
         return {'decision':'non_risk','reason':'未发现明确风险','events':[]},{}
     monkeypatch.setattr(model,'call_model',fake)
     asyncio.run(app.state.worker.process(store.one('SELECT * FROM jobs WHERE id=?',(jid,))))
-    assert captured==[old]
+    assert captured==[current_rules(old)]
     saved=store.one('SELECT * FROM jobs WHERE id=?',(jid,))
-    assert json.loads(saved['rules_json'])==old and saved['rules_snapshot_origin']=='submission'
+    assert json.loads(saved['rules_json'])==current_rules(old) and saved['rules_snapshot_origin']=='submission'
     assert admin.post('/api/jobs',json={'document_ids':[doc]}).status_code==409
     with store.db() as db:
         legacy=db.execute("INSERT INTO jobs(document_id,status,created_at,company_json) VALUES (?,'queued','test','{}')",(doc,)).lastrowid

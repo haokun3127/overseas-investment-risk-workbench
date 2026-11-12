@@ -3,6 +3,9 @@ import re
 from collections import Counter
 from urllib.parse import urlsplit
 from .vectors import fuse_hits
+from .legal_knowledge import matches_filters, metadata
+from .meeting import prioritize
+from .presentation import clean_reference, clean_summary
 
 _STOP_SPLIT = re.compile(r"[的了和与及或在对于向从以由把被让给并而但且或及]")
 
@@ -42,6 +45,12 @@ _CROSS_LINGUAL_MAP = {
     "镍矿": ("nikel", "nickel", "minerba", "hilirisasi", "smelter", "esdm"),
     "土地": ("pertanahan", "hgb", "hgu", "hak", "guna", "bangunan", "agraria", "atr", "bpn"),
     "外汇": ("devisa", "dhe", "sda", "rupiah", "bank", "indonesia", "pbi"),
+    "电商": ("pmse", "ppmse", "lokapasar", "marketplace", "commerce", "elektronik", "perdagangan"),
+    "电子商务": ("pmse", "ppmse", "lokapasar", "marketplace", "commerce", "elektronik", "perdagangan"),
+    "社交": ("social", "commerce", "media", "sosial"),
+    "交易": ("transaksi", "pembayaran", "perdagangan", "transaction"),
+    "支付": ("pembayaran", "transaksi", "payment"),
+    "留存": ("penempatan", "rekening", "khusus", "retensi", "devisa"),
 }
 
 # Chinese queries often use a near-synonym that never appears in the foreign text or its summary.
@@ -128,9 +137,10 @@ def _bm25_concepts(groups, counters):
         matched_groups.append(hit_groups)
     return scores, matched_groups
 
-def retrieve(store, query, external=False, limit=4, company_id=None, per_document=False):
+def retrieve(store, query, external=False, limit=4, company_id=None, per_document=False,
+             category='', section='', validity=''):
     condition = ""  # Legacy external argument no longer restricts eligible knowledge.
-    rows = store.rows("""SELECT c.id,c.document_id,c.locator,c.text,d.title,d.source,d.date,d.zh_summary,d.zh_keywords,d.company_id FROM chunks c
+    rows = store.rows("""SELECT c.id,c.document_id,c.locator,c.text,c.section_type,d.legal_meta,d.title,d.source,d.date,d.zh_summary,d.zh_keywords,d.company_id FROM chunks c
         JOIN documents d ON d.id=c.document_id WHERE d.kind='knowledge' AND d.demo=0 AND d.quarantined_at IS NULL""" + condition + " ORDER BY c.id")
     scoped = store.rows("SELECT document_id,id FROM companies WHERE document_id IS NOT NULL") if store.one("SELECT name FROM sqlite_master WHERE type='table' AND name='companies'") else []
     owners = {r["document_id"]: r["id"] for r in scoped}
@@ -141,8 +151,11 @@ def retrieve(store, query, external=False, limit=4, company_id=None, per_documen
         doc_cid = r.get("company_id") or owners.get(r["document_id"])
         if doc_cid is not None and doc_cid != company_id:
             continue
+        if not matches_filters(r, category, section, validity):
+            continue
         filtered_rows.append(r)
     rows = filtered_rows
+    eligible_ids = {r['id'] for r in rows}
     if not rows:
         return []
     raw_list, groups_raw = _concept_groups(query, allow_expand=False)
@@ -227,12 +240,26 @@ def retrieve(store, query, external=False, limit=4, company_id=None, per_documen
             row.pop("zh_keywords", None)
     # Hybrid order only when vectors are ready; otherwise BM25 rows, scores and order are returned untouched.
     try:
-        fused = fuse_hits(store, query, ranked, limit, external, company_id, per_document)
+        fused = fuse_hits(store, query, ranked, max(limit, 200), external, company_id, per_document)
     except Exception:
         fused = None
-    if fused is not None:
-        return fused
-    return ranked[:limit]
+    result = [row for row in fused if row['id'] in eligible_ids] if fused is not None else ranked
+    if category or section or validity:
+        seen = {row['document_id'] if per_document else row['id'] for row in result}
+        for row in ranked:
+            key = row['document_id'] if per_document else row['id']
+            if len(result) >= limit: break
+            if key not in seen:
+                result.append(row); seen.add(key)
+    doc_meta = {r['document_id']: r for r in rows}
+    for row in result:
+        row['legal_meta'] = doc_meta[row['document_id']]['legal_meta']
+    result = prioritize(result)[:limit]
+    if not (category or section or validity):
+        for row in result:
+            row.pop('legal_meta', None)
+            row.pop('section_type', None)
+    return result
 
 
 def _field_matches(text, terms):
@@ -328,7 +355,7 @@ def annotate_hits(store, query, hits, viewer_company_id=None):
     for hit in hits:
         doc = store.one(
             """SELECT id,title,source,url,date,date_source,created_at,archived_at,fetched_at,
-                      filename,file_path,company_id,body FROM documents WHERE id=?""",
+                      filename,file_path,company_id,body,legal_meta,legal_revision FROM documents WHERE id=?""",
             (hit["document_id"],),
         )
         if not doc:
@@ -350,8 +377,13 @@ def annotate_hits(store, query, hits, viewer_company_id=None):
             reverse=True,
         )
         hit_windows = _hit_windows(doc["body"], field_terms, hit.get("locator", ""))
+        if hit.get('section_type') and hit['section_type'] != 'general':
+            bounds = _locator_range(hit.get('locator',''))
+            if bounds and doc['body'][bounds[0]:bounds[1]] == hit['text']:
+                hit_windows = [{'start': bounds[0], 'end': bounds[1], 'text': hit['text']}]
         row = {
             **hit,
+            'legal_metadata': metadata(doc),
             "url": doc["url"],
             "created_at": doc["created_at"],
             "date_source": doc["date_source"],
@@ -366,5 +398,8 @@ def annotate_hits(store, query, hits, viewer_company_id=None):
             "editable": viewer_company_id is None or doc.get("company_id") == viewer_company_id,
             "group_key": _group_key(doc["title"], doc["url"]),
         }
+        row=clean_reference(row)
+        for field in ('zh_summary','zh_keywords'):
+            if field in row:row[field]=clean_summary(row[field])
         annotated.append(row)
     return annotated

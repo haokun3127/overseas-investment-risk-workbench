@@ -13,6 +13,7 @@ from app.ingest import parse_file, insert_document
 from app.model import validate_result, validate_endpoint
 from app.retrieval import retrieve
 from app.store import Store, DEFAULT_RULES
+from app.meeting import current_rules
 
 HEADERS={'X-Requested-With':'risk-workbench'}
 
@@ -23,7 +24,7 @@ def test_preflight_cancellation_and_worker_claim(client):
     assert not check['ready'] and len(check['blockers'])==2
     assert check['items'][0]['issues']==[]
     s.model_mode='external';s.model_base_url='https://example.test/v1';s.model_name='test';s.model_api_key='test'
-    rules=copy.deepcopy(DEFAULT_RULES);rules['confirmed']=True;client.put('/api/rules',json=rules)
+    rules=current_rules(DEFAULT_RULES);rules['confirmed']=True;client.put('/api/rules',json=rules)
     assert client.post('/api/jobs/preflight',json={'document_ids':[doc_id]}).json()['ready']
     jid=client.post('/api/jobs',json={'document_ids':[doc_id]}).json()['items'][0]['id']
     store=client.app.state.store
@@ -184,7 +185,7 @@ def test_job_preconditions(client):
     assert client.post('/api/jobs',json={'document_ids':[doc_id]}).status_code==409
     s=client.app.state.settings;s.model_base_url='https://test.example/v1';s.model_name='test-model';s.model_api_key='secret'
     assert client.post('/api/jobs',json={'document_ids':[doc_id]}).status_code==409
-    rules=copy.deepcopy(DEFAULT_RULES);rules['confirmed']=True
+    rules=current_rules(DEFAULT_RULES);rules['confirmed']=True
     assert client.put('/api/rules',json=rules).status_code==200
     assert client.post('/api/jobs',json={'document_ids':[doc_id]}).status_code==200
     allowed=add(client,title='授权资料',allow_external=True)
@@ -244,7 +245,7 @@ def test_worker_api_protocol_and_failed_version_retention(client,monkeypatch):
     original=httpx.AsyncClient
     monkeypatch.setattr(model.httpx,'AsyncClient',lambda **kwargs:original(transport=httpx.MockTransport(handle),**kwargs))
     s=client.app.state.settings;s.model_mode='external';s.model_base_url='https://example.test/v1';s.model_name='synthetic-test-model';s.model_api_key='test-key'
-    rules=copy.deepcopy(DEFAULT_RULES);rules['confirmed']=True;client.put('/api/rules',json=rules)
+    rules=current_rules(DEFAULT_RULES);rules['confirmed']=True;client.put('/api/rules',json=rules)
     doc_id=add(client,allow_external=True)
     def run(kind):
         nonlocal response_kind
@@ -300,7 +301,7 @@ def test_backup_preserves_documents_and_files(client,tmp_path):
 def test_long_document_failed_part_saves_no_partial_analysis(client,monkeypatch):
     from app import model
     s=client.app.state.settings;s.model_mode='external';s.model_base_url='https://example.test/v1';s.model_name='test';s.model_api_key='test'
-    rules=copy.deepcopy(DEFAULT_RULES);rules['confirmed']=True;client.put('/api/rules',json=rules)
+    rules=current_rules(DEFAULT_RULES);rules['confirmed']=True;client.put('/api/rules',json=rules)
     doc_id=add(client,body='这是测试用的风险资料正文。'*300,allow_external=True)
     calls=[]
     async def fake(settings,payload):
@@ -363,4 +364,4 @@ def test_responses_transport_and_storage_policy(monkeypatch,status,text,success)
         assert result['decision']=='insufficient' and usage['output_tokens']==20
     else:
         with pytest.raises(ValueError):asyncio.run(model.call_model(settings,{'synthetic':True}))
-    assert len(observed)==1
+    assert len(observed)==(3 if text=='not-json' else 1)

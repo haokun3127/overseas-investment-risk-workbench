@@ -204,7 +204,7 @@ async function showWebRun(id){
       (p.knowledge_from_history?`<p class="history-saved-note">资料保存于 ${when(p.knowledge_saved_at)}；本次筛选不会删除历史入库资料。</p>`:'')+
       `${p.reason?`<p class="wrc-reason">${esc(p.reason)}</p>`:''}`+
       (p.review_origin?`<p class="source-line">${esc({model:'本次模型判定',quote_repair:'本次模型判定 · 引文已按原文句段校正',reused:'沿用相同正文和主题的历史判定',unverified:'模型判定未通过校验'}[p.review_origin]||'')}</p>`:'')+
-      (p.quote?`<blockquote class="wrc-quote">${esc(p.quote)}</blockquote>`:'')+
+      (p.quote?`<blockquote class="wrc-quote">${readingEsc(p.quote)}</blockquote>`:'')+
       `<div class="wrc-foot"><span>收录于 ${when(p.fetched_at)} · ${p.characters.toLocaleString('zh-CN')} 字符</span><div class="wrc-actions">${r.status==='completed'?`<button class="secondary small" data-web-compare="${p.id}" aria-expanded="false" aria-controls="compare-${p.id}">查看更新对比</button>`:''}<button class="secondary small" data-web-original="${p.id}">查看原文</button>${Object.entries(p.imports).map(([kind,doc])=>`<button class="secondary small" data-source="${doc}">${kind==='knowledge'?'查看知识库详情':'查看分析记录'}</button>`).join('')}</div></div><section id="compare-${p.id}" class="web-comparison" aria-label="正文版本对比" hidden></section>`+
     `</article>`;
 
@@ -233,7 +233,7 @@ async function showWebRun(id){
         try {
           const p = await api(`/web/pages/${b.dataset.webOriginal}`);
           const quote = r.items.find((item) => String(item.id) === b.dataset.webOriginal)?.quote || '';
-          const marked = quote ? markRanges(p.body, [quote]) : { html: esc(p.body), count: 0 };
+          const marked = quote ? markRanges(p.body, [quote]) : { html: readingEsc(p.body), count: 0 };
           const quoteTools = !quote ? '' : marked.count
             ? '<button type="button" class="secondary small" id="jump-web-quote">跳到 AI 引用片段</button>'
             : '<p class="notice-inline" role="note">原文中未找到 AI 引用的片段，请人工核对。</p>';
